@@ -1,46 +1,16 @@
+// app/api/voice/route.ts
+import twilio from "twilio";
 import { NextResponse } from "next/server";
 
 export async function POST() {
-  console.log(">>> [API] Requête POST /api/voice reçue");
+  const twiml = new twilio.twiml.VoiceResponse();
 
-  const twiml = `
-<Response>
-  <Say voice="alice" language="fr-FR">
-    Bonjour, merci d'appeler Call to eat!
-    Que souhaitez-vous commander aujourd'hui ?
-  </Say>
-
-  <Gather input="speech" language="fr-FR" action="/api/voice/process" method="POST" timeout="5">
-    <Say voice="alice" language="fr-FR">
-      Je vous écoute.
-    </Say>
-  </Gather>
-
-  <Say voice="alice" language="fr-FR">
-    Je n'ai rien entendu. Au revoir.
-  </Say>
-</Response>
-`;
-
-  return new NextResponse(twiml, {
-    status: 200,
-    headers: {
-      "Content-Type": "text/xml",
-    },
+  const connect = twiml.connect();
+  connect.stream({
+    url: "wss://call2food-final-production.up.railway.app",
   });
-}
 
-export async function GET() {
-  const twiml = `
-<Response>
-  <Say voice="alice" language="fr-FR">
-    Bienvenue chez Call2Eat. 
-    Cette route n'accepte que les requêtes POST.
-  </Say>
-</Response>
-`;
-
-  return new NextResponse(twiml, {
+  return new NextResponse(twiml.toString(), {
     status: 200,
     headers: {
       "Content-Type": "text/xml",
