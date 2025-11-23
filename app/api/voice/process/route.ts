@@ -1,168 +1,75 @@
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
-
-export const runtime = "nodejs";
-
-type ParsedOrder = {
-  productName: string | null;
-  quantity: number | null;
-};
-
-// Normalise le texte (minuscules, enlève accents, etc.)
-function normalizeText(text: string): string {
-  return text
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/\p{Diacritic}/gu, "");
-}
-
-// Détecte la quantité dans la phrase (1, 2, 3...)
-function detectQuantity(text: string): number {
-  const normalized = normalizeText(text);
-
-  // chiffres
-  const numberMatch = normalized.match(/\b(\d+)\b/);
-  if (numberMatch) {
-    const num = parseInt(numberMatch[1], 10);
-    if (!Number.isNaN(num) && num > 0 && num < 20) return num;
-  }
-
-  // mots en français
-  const quantityWords: Record<string, number> = {
-    un: 1,
-    une: 1,
-    "une pizza": 1,
-    "une margarita": 1,
-    deux: 2,
-    "deux pizzas": 2,
-    trois: 3,
-    quatre: 4,
-    cinq: 5,
-  };
-
-  for (const [word, value] of Object.entries(quantityWords)) {
-    if (normalized.includes(word)) return value;
-  }
-
-  // par défaut 1
-  return 1;
-}
-
-// Détecte le nom de pizza dans la phrase
-function detectProductName(text: string): string | null {
-  const normalized = normalizeText(text);
-
-  const products = [
-    { key: "margarita", label: "Margarita" },
-    { key: "margherita", label: "Margarita" }, // au cas où
-    { key: "reine", label: "Reine" },
-    { key: "4 fromages", label: "4 fromages" },
-    { key: "quatre fromages", label: "4 fromages" },
-    { key: "chevre miel", label: "Chèvre miel" },
-    { key: "chavre miel", label: "Chèvre miel" }, // erreurs possibles
-    { key: "4 saisons", label: "4 saisons" },
-    { key: "quatre saisons", label: "4 saisons" },
-    { key: "diavola", label: "Diavola" },
-    { key: "savoyarde", label: "Savoyarde" },
-  ];
-
-  for (const product of products) {
-    if (normalized.includes(product.key)) {
-      return product.label;
-    }
-  }
-
-  return null;
-}
-
-// Analyse complète d'une phrase
-function parseOrder(text: string): ParsedOrder {
-  const quantity = detectQuantity(text);
-  const productName = detectProductName(text);
-
-  return { quantity, productName };
-}
+import { parseOrderWithAI } from "@/lib/aiOrderParser";
 
 export async function POST(req: Request) {
   const formData = await req.formData();
 
-  const speechResultRaw = formData.get("SpeechResult")?.toString() ?? "";
-  const fromNumber = formData.get("From")?.toString() ?? null;
+  const speechResult = (formData.get("SpeechResult") ?? "") as string;
+  const fromNumber = (formData.get("From") ?? "") as string;
 
-  console.log("Texte brut Twilio :", speechResultRaw);
+  console.log("Texte brut Twilio :", speechResult);
   console.log("Numéro appelant :", fromNumber);
 
-  const { quantity, productName } = parseOrder(speechResultRaw);
+  // 1) Appel IA pour interpréter la commande
+  const aiOrder = await parseOrderWithAI(speechResult);
 
-  console.log("Commande interprétée :", {
-    quantity,
-    productName,
-  });
+  let productName: string | null = null;
+  let quantity: number | null = null;
 
-  // Insertion dans Supabase
+  if (aiOrder && aiOrder.items.length > 0) {
+    // Pour l’instant on ne stocke que le premier produit dans voice_orders
+    productName = aiOrder.items[0].product;
+    quantity = aiOrder.items[0].quantity;
+  }
+
+  console.log("Commande interprétée par l'IA :", aiOrder);
+
+  // 2) Enregistrement dans Supabase (table voice_orders)
   const { error } = await supabaseAdmin.from("voice_orders").insert({
     from_number: fromNumber,
-    speech_result: speechResultRaw,
+    speech_result: speechResult,
     product_name: productName,
     quantity: quantity,
   });
 
   if (error) {
-    console.error("Erreur Supabase voice_orders :", error);
-
-    const errorTwiml = `
-<Response>
-  <Say voice="alice" language="fr-FR">
-    Désolé, une erreur est survenue lors de l'enregistrement de votre commande.
-  </Say>
-  <Hangup />
-</Response>
-`;
-
-    return new NextResponse(errorTwiml, {
-      status: 200,
-      headers: { "Content-Type": "text/xml" },
-    });
+    console.error("Erreur d'insertion Supabase :", error);
+    return NextResponse.json(
+      { success: false, error: "Erreur Supabase" },
+      { status: 500 }
+    );
   }
 
-  // Réponse personnalisée si on a compris la pizza
-  let responseText: string;
-
-  if (productName) {
-    const qty = quantity ?? 1;
-    const pizzasWord = qty > 1 ? "pizzas" : "pizza";
-
-    responseText = `Merci ! J'ai bien reçu votre commande de ${qty} ${pizzasWord} ${productName}.`;
-  } else {
-    responseText = `Merci ! J'ai bien reçu votre commande, mais je n'ai pas bien compris le type de pizza.`;
-  }
-
-  const twiml = `
-<Response>
-  <Say voice="alice" language="fr-FR">
-    ${responseText}
-  </Say>
-  <Hangup />
-</Response>
-`;
-
-  return new NextResponse(twiml, {
-    status: 200,
-    headers: { "Content-Type": "text/xml" },
-  });
 }
+  // 3) Réponse TwiML dynamique
+  let humanSummary = "Merci, votre commande a été prise en compte.";
 
-export async function GET() {
+  if (aiOrder && aiOrder.items.length > 0) {
+    const parts = aiOrder.items.map((item) => {
+      const qty = item.quantity ?? 1;
+      const plural = qty > 1 ? "s" : "";
+      return `${qty} ${item.product}${plural}`;
+    });
+
+    humanSummary = `Merci. J'ai bien noté ${parts.join(" et ")}.`;
+  } else {
+    humanSummary =
+      "Merci. Votre commande a été enregistrée, mais je n'ai pas bien compris les détails.";
+  }
+
   const twiml = `
 <Response>
   <Say voice="alice" language="fr-FR">
-    Cette route n'accepte que les requêtes POST.
+    ${humanSummary}
   </Say>
 </Response>
-`;
+`.trim();
 
   return new NextResponse(twiml, {
     status: 200,
-    headers: { "Content-Type": "text/xml" },
+    headers: {
+      "Content-Type": "text/xml",
+    },
   });
 }

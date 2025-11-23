@@ -6,7 +6,7 @@ export async function POST() {
   const twiml = `
 <Response>
   <Say voice="alice" language="fr-FR">
-    Bonjour, merci d'appeler Call2Eat !
+    Bonjour, merci d'appeler Call to eat!
     Que souhaitez-vous commander aujourd'hui ?
   </Say>
 
