@@ -1,25 +1,24 @@
-// voice-gateway/server.js
-
 const WebSocket = require('ws');
 
-const PORT = 8080;
+const PORT = process.env.PORT || 8080;
 
-// Création du serveur WebSocket
 const wss = new WebSocket.Server({ port: PORT }, () => {
   console.log(`✅ Voice Gateway WebSocket démarré sur ws://localhost:${PORT}`);
 });
 
-// Quand Twilio (ou un client) se connecte
-wss.on('connection', (ws, req) => {
-  console.log('🔔 Nouvelle connexion WebSocket reçue');
+wss.on('connection', (ws) => {
+  console.log('🔔 Nouvelle connexion WebSocket Twilio');
 
   ws.on('message', (message) => {
-    // Twilio enverra du JSON texte
     try {
       const data = JSON.parse(message.toString());
-      console.log('📩 Message reçu :', data);
+      console.log('📩 Event:', data.event);
+
+      if (data.event === 'media') {
+        console.log('   → chunk audio reçu (len base64 =', data.media.payload.length, ')');
+      }
     } catch (e) {
-      console.log('📩 Message brut reçu :', message.toString());
+      console.log('📩 Message brut:', message.toString().slice(0, 200));
     }
   });
 
