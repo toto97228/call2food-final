@@ -1,3 +1,4 @@
+// voice-gateway/server.js
 const WebSocket = require('ws');
 
 const PORT = process.env.PORT || 8080;
@@ -15,7 +16,10 @@ wss.on('connection', (ws) => {
       console.log('📩 Event:', data.event);
 
       if (data.event === 'media') {
-        console.log('   → chunk audio reçu (len base64 =', data.media.payload.length, ')');
+        console.log(
+          '   → chunk audio reçu, taille base64 =',
+          data.media.payload.length
+        );
       }
     } catch (e) {
       console.log('📩 Message brut:', message.toString().slice(0, 200));
