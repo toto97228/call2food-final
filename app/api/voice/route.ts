@@ -1,25 +1,18 @@
-import twilio from "twilio";
+// app/api/voice/route.ts
 import { NextResponse } from "next/server";
 
 export async function POST() {
-  const twiml = new twilio.twiml.VoiceResponse();
+  const twiml = `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="alice" language="fr-FR">
+    Bienvenue chez Call to Eat. Votre commande va être prise en charge par notre assistant.
+  </Say>
+  <Connect>
+    <Stream url="wss://call2food-final-production.up.railway.app" />
+  </Connect>
+</Response>`;
 
-  // 1) Message de bienvenue
-  twiml.say(
-    {
-      voice: "alice",
-      language: "fr-FR",
-    },
-    "Bienvenue chez Call to Eat. Votre commande va être prise en charge par notre assistant."
-  );
-
-  // 2) Connexion au stream temps réel
-  const connect = twiml.connect();
-  connect.stream({
-    url: "wss://call2food-final-production.up.railway.app",
-  });
-
-  return new NextResponse(twiml.toString(), {
+  return new NextResponse(twiml, {
     status: 200,
     headers: {
       "Content-Type": "text/xml",
