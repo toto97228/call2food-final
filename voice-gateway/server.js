@@ -1,4 +1,3 @@
-// voice-gateway/server.js
 const WebSocket = require('ws');
 
 const PORT = process.env.PORT || 8080;
@@ -13,7 +12,13 @@ wss.on('connection', (ws) => {
   ws.on('message', (message) => {
     try {
       const data = JSON.parse(message.toString());
+
+      // Event principal (start / media / stop, etc.)
       console.log('📩 Event:', data.event);
+
+      if (data.event === 'start') {
+        console.log('   → Stream démarré pour appel', data.start?.callSid);
+      }
 
       if (data.event === 'media') {
         console.log(
@@ -21,8 +26,12 @@ wss.on('connection', (ws) => {
           data.media.payload.length
         );
       }
+
+      if (data.event === 'stop') {
+        console.log('   → Stream terminé');
+      }
     } catch (e) {
-      console.log('📩 Message brut:', message.toString().slice(0, 200));
+      console.log('📩 Message non JSON:', message.toString().slice(0, 200));
     }
   });
 
