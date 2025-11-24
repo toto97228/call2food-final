@@ -1,161 +1,124 @@
 // voice-gateway/server.js
-const WebSocket = require("ws");
+import WebSocket, { WebSocketServer } from "ws";
+import dotenv from "dotenv";
+import OpenAI from "openai";
 
-const PORT = process.env.PORT || 8080;
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+dotenv.config();
 
-if (!OPENAI_API_KEY) {
-  console.error("❌ Environment variable OPENAI_API_KEY manquante.");
-  process.exit(1);
-}
-
-// Serveur WebSocket qui reçoit Twilio
-const wss = new WebSocket.Server({ port: PORT }, () => {
-  console.log(`✅ Voice Gateway WebSocket démarré sur ws://localhost:${PORT}`);
+// ------------------------------
+// 🔑 OpenAI Realtime Client
+// ------------------------------
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
 });
 
-wss.on("connection", (twilioWs) => {
-  console.log("🔔 Nouvelle connexion WebSocket Twilio");
+// ------------------------------
+// 🔌 Serveur WebSocket Railway
+// ------------------------------
+const wss = new WebSocketServer({
+  port: process.env.PORT || 8080,
+});
 
-  let streamSid = null;
+console.log("🚀 Voice Gateway WebSocket READY on port", process.env.PORT || 8080);
 
-  // Connexion WebSocket à l’API Realtime d’OpenAI
-  const openaiWs = new WebSocket(
+// -------------------------------------------
+// 📡 Gestion connexion Twilio -> Serveur
+// -------------------------------------------
+wss.on("connection", (ws) => {
+  console.log("📞 Nouvelle connexion WebSocket Twilio");
+
+  // ------------------------------
+  // 🔥 Connexion OpenAI Realtime WS
+  // ------------------------------
+  const ai = new WebSocket(
     "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview",
     {
       headers: {
-        Authorization: `Bearer ${OPENAI_API_KEY}`,
+        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
         "OpenAI-Beta": "realtime=v1",
       },
     }
   );
 
-  // Quand OpenAI est connecté, on configure la session
-  openaiWs.on("open", () => {
-    console.log("🤖 Connecté à OpenAI Realtime");
+  // Logs OpenAI
+  ai.on("open", () => console.log("🟢 CONNECTED to OpenAI Realtime"));
+  ai.on("close", () => console.log("🟡 OpenAI WebSocket CLOSED"));
+  ai.on("error", (err) => console.log("🔴 OpenAI ERROR:", err));
 
-    // 1) Configurer la session audio (format g711_ulaw compatible Twilio)
-    openaiWs.send(
-      JSON.stringify({
-        type: "session.update",
-        session: {
-          // Twilio Media Streams utilise g711 μ-law 8kHz par défaut
-          input_audio_format: "g711_ulaw",
-          output_audio_format: "g711_ulaw",
-          instructions:
-            "Tu es l'assistant vocal du food truck Call2Eat. " +
-            "Tu parles français, tu poses des questions courtes " +
-            "et tu aides le client à commander pizzas et sushis.",
-        },
-      })
-    );
-
-    // 2) Message d’accueil généré par l’IA
-    openaiWs.send(
-      JSON.stringify({
-        type: "response.create",
-        response: {
-          instructions:
-            "Dis au client : 'Bonjour, bienvenue chez Call2Eat. " +
-            "Que souhaitez-vous commander aujourd'hui ?'",
-        },
-      })
-    );
-  });
-
-  // Messages reçus d’OpenAI (audio de réponse, etc.)
-  openaiWs.on("message", (data) => {
-    let event;
+  // ----------------------------------------
+  // 🎧 Twilio → OpenAI (Audio Input)
+  // ----------------------------------------
+  ws.on("message", async (msg) => {
     try {
-      event = JSON.parse(data.toString());
-    } catch (err) {
-      console.error("⚠️ Message OpenAI non valide :", err);
-      return;
-    }
+      const data = JSON.parse(msg);
 
-    // OpenAI envoie des chunks audio sous forme d'événements delta
-    if (
-      event.type === "response.output_audio.delta" &&
-      event.delta?.audio &&
-      streamSid
-    ) {
-      const msgToTwilio = {
-        event: "media",
-        streamSid,
-        media: {
-          // audio en base64, déjà au bon format (g711_ulaw)
-          payload: event.delta.audio,
-        },
-      };
-      twilioWs.send(JSON.stringify(msgToTwilio));
-    }
-  });
+      if (data.event === "media") {
+        const audio = data.media.payload;
 
-  openaiWs.on("error", (err) => {
-    console.error("❌ Erreur WebSocket OpenAI :", err);
-  });
+        console.log("🎵 chunk audio reçu, taille =", audio.length);
 
-  openaiWs.on("close", () => {
-    console.log("🔌 Connexion OpenAI fermée");
-  });
+        // Envoi du chunk audio vers OpenAI
+        ai.send(
+          JSON.stringify({
+            type: "input_audio_buffer.append",
+            audio: audio,
+          })
+        );
+      }
 
-  // Messages reçus de Twilio
-  twilioWs.on("message", (message) => {
-    let data;
-    try {
-      data = JSON.parse(message.toString());
-    } catch (err) {
-      console.error("⚠️ Message Twilio non valide :", err);
-      return;
-    }
+      if (data.event === "stop") {
+        console.log("🛑 Fin du Stream Twilio → Ask OpenAI to respond");
 
-    switch (data.event) {
-      case "connected":
-        console.log("📞 Twilio event: connected");
-        break;
+        ai.send(
+          JSON.stringify({
+            type: "input_audio_buffer.commit",
+          })
+        );
 
-      case "start":
-        streamSid = data.start.streamSid;
-        console.log("▶️  Stream démarré, streamSid =", streamSid);
-        break;
-
-      case "media":
-        // audio client → OpenAI
-        if (openaiWs.readyState === WebSocket.OPEN && data.media?.payload) {
-          openaiWs.send(
-            JSON.stringify({
-              type: "input_audio_buffer.append",
-              audio: data.media.payload,
-            })
-          );
-        }
-        break;
-
-      case "stop":
-        console.log("⏹️  Stream arrêté par Twilio");
-        if (openaiWs.readyState === WebSocket.OPEN) {
-          // On indique à OpenAI que le buffer est terminé
-          openaiWs.send(
-            JSON.stringify({
-              type: "input_audio_buffer.commit",
-            })
-          );
-        }
-        break;
-
-      default:
-        console.log("ℹ️  Event Twilio :", data.event);
+        ai.send(
+          JSON.stringify({
+            type: "response.create",
+            response: {
+              modalities: ["audio", "text"],
+            },
+          })
+        );
+      }
+    } catch (e) {
+      console.log("⚠️ Erreur parsing Twilio message:", e);
     }
   });
 
-  twilioWs.on("close", () => {
-    console.log("🔌 Connexion Twilio fermée");
-    if (openaiWs.readyState === WebSocket.OPEN) {
-      openaiWs.close();
+  // ----------------------------------------
+  // 🔊 OpenAI → Twilio (Audio Output)
+  // ----------------------------------------
+  ai.on("message", (msg) => {
+    const data = JSON.parse(msg);
+
+    if (data.type === "response.output_text.delta") {
+      console.log("📝 Texte OpenAI:", data.text);
+    }
+
+    if (data.type === "response.audio.delta") {
+      console.log("🔊 Audio OpenAI -> Twilio (chunk)");
+
+      ws.send(
+        JSON.stringify({
+          event: "media",
+          media: {
+            payload: data.audio, // Base64 audio
+          },
+        })
+      );
+    }
+
+    if (data.type === "response.completed") {
+      console.log("✅ Réponse OpenAI terminée");
     }
   });
 
-  twilioWs.on("error", (err) => {
-    console.error("❌ Erreur WebSocket Twilio :", err);
+  ws.on("close", () => {
+    console.log("❌ Connexion WebSocket Twilio fermée");
+    ai.close();
   });
 });
