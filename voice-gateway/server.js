@@ -1,4 +1,4 @@
-// voice-gateway/server.js  (version CommonJS)
+// voice-gateway/server.js (CommonJS + garde readyState)
 
 const WebSocket = require("ws");
 const dotenv = require("dotenv");
@@ -37,7 +37,6 @@ function connectOpenAI() {
   );
 }
 
-// ---- Quand Twilio se connecte ----
 wss.on("connection", (twilioWs) => {
   console.log("🔔 Connexion WebSocket Twilio");
 
@@ -57,6 +56,12 @@ wss.on("connection", (twilioWs) => {
     try {
       data = JSON.parse(raw.toString());
     } catch {
+      return;
+    }
+
+    // 🛡️ Si OpenAI n'est pas encore prêt, on ignore pour éviter le crash
+    if (ai.readyState !== WebSocket.OPEN) {
+      console.log("⏳ OpenAI pas encore prêt, on ignore event:", data.event);
       return;
     }
 
@@ -88,12 +93,14 @@ wss.on("connection", (twilioWs) => {
     }
 
     if (msg.type === "response.audio.delta" && msg.delta) {
-      twilioWs.send(
-        JSON.stringify({
-          event: "media",
-          media: { payload: msg.delta }, // audio base64 vers Twilio
-        })
-      );
+      if (twilioWs.readyState === WebSocket.OPEN) {
+        twilioWs.send(
+          JSON.stringify({
+            event: "media",
+            media: { payload: msg.delta }, // audio base64 vers Twilio
+          })
+        );
+      }
     }
   });
 
