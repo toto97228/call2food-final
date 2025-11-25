@@ -6,7 +6,10 @@ export async function POST(req: Request) {
   const twiml = `
     <Response>
       <Connect>
-        <Stream url="wss://call2food-final-production.up.railway.app" />
+        <Stream
+          url="wss://call2food-final-production.up.railway.app"
+          bidirectional="true"
+        />
       </Connect>
     </Response>
   `.trim();
