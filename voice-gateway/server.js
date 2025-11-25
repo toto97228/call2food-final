@@ -1,4 +1,6 @@
 // voice-gateway/server.js
+console.log("🔑 OPENAI API KEY LOADED:", process.env.OPENAI_API_KEY ? "OK" : "MISSING");
+
 import WebSocket, { WebSocketServer } from "ws";
 import dotenv from "dotenv";
 
