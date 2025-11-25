@@ -10,11 +10,11 @@ const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
 console.log("🔧 OPENAI_API_KEY chargée ?", OPENAI_API_KEY ? "OUI" : "NON");
 
-// Serveur WS Railway
+// ---- Serveur WebSocket Railway ----
 const wss = new WebSocket.Server({ port: PORT });
 console.log("🚀 Voice Gateway WebSocket démarré sur ws://localhost:" + PORT);
 
-// Connexion OpenAI Realtime
+// ---- Connexion OpenAI Realtime ----
 function createOpenAIConnection() {
   return new WebSocket(
     "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview",
@@ -33,6 +33,7 @@ wss.on("connection", (twilio) => {
   const ai = createOpenAIConnection();
   let aiReady = false;
   let hasAudio = false;
+  let streamSid = null;         // important pour renvoyer l’audio à Twilio
   const pendingEvents = [];
 
   // -----------------------------
@@ -43,8 +44,16 @@ wss.on("connection", (twilio) => {
 
     if (ev === "start") {
       console.log("▶️ START Twilio");
+
       hasAudio = false;
 
+      // on récupère le streamSid fourni par Twilio
+      if (data.start && data.start.streamSid) {
+        streamSid = data.start.streamSid;
+        console.log("💡 streamSid =", streamSid);
+      }
+
+      // on nettoie le buffer côté OpenAI
       ai.send(
         JSON.stringify({
           type: "input_audio_buffer.clear",
@@ -75,15 +84,13 @@ wss.on("connection", (twilio) => {
         return;
       }
 
-      // ❌ On NE fait PAS de commit ici (pour éviter input_audio_buffer_commit_empty)
-
-      // On demande quand même une réponse vocale
+      // On demande une réponse vocale courte
       ai.send(
         JSON.stringify({
           type: "response.create",
           response: {
             instructions:
-              "Réponds en français, brièvement, en voix Alloy. " +
+              "Réponds en français, brièvement, avec la voix Alloy. " +
               "Tu es l'assistant du food truck Call2Food.",
             modalities: ["audio", "text"],
           },
@@ -101,28 +108,16 @@ wss.on("connection", (twilio) => {
     console.log("🤖 OpenAI Realtime connecté");
     aiReady = true;
 
-    // Config session
+    // Config session (audio bidirectionnel)
     ai.send(
       JSON.stringify({
         type: "session.update",
         session: {
           instructions:
-            "Tu es Call2Food. Tu prends les commandes de pizzas et sushis en français, de façon concise.",
+            "Tu es Call2Food. Tu prends les commandes de pizzas et sushis en français, de façon concise et polie.",
           input_audio_format: "g711_ulaw",
           output_audio_format: "g711_ulaw",
           voice: "alloy",
-        },
-      })
-    );
-
-    // Message de bienvenue vocal
-    ai.send(
-      JSON.stringify({
-        type: "response.create",
-        response: {
-          instructions:
-            "Bonjour, ici Call2Food. Que désirez-vous commander aujourd’hui ?",
-          modalities: ["audio", "text"],
         },
       })
     );
@@ -133,6 +128,18 @@ wss.on("connection", (twilio) => {
       for (const ev of pendingEvents) handleTwilioEvent(ev);
       pendingEvents.length = 0;
     }
+
+    // Message de bienvenue vocal (après avoir eu START → streamSid)
+    ai.send(
+      JSON.stringify({
+        type: "response.create",
+        response: {
+          instructions:
+            "Bonjour, ici Call2Food. Que désirez-vous commander aujourd’hui ?",
+          modalities: ["audio", "text"],
+        },
+      })
+    );
   });
 
   ai.on("error", (err) => {
@@ -173,15 +180,21 @@ wss.on("connection", (twilio) => {
       return;
     }
 
+    // audio génération en cours
     if (packet.type === "response.audio.delta" && packet.delta) {
-      if (twilio.readyState === WebSocket.OPEN) {
+      if (twilio.readyState === WebSocket.OPEN && streamSid) {
         twilio.send(
           JSON.stringify({
             event: "media",
+            streamSid,               // <<< OBLIGATOIRE pour Twilio
             media: { payload: packet.delta },
           })
         );
       }
+    }
+
+    if (packet.type === "response.completed") {
+      console.log("✅ Réponse OpenAI terminée");
     }
 
     if (packet.type === "error") {
@@ -202,5 +215,9 @@ wss.on("connection", (twilio) => {
     try {
       twilio.close();
     } catch {}
+  });
+
+  twilio.on("error", (err) => {
+    console.error("❌ Erreur WS Twilio :", err);
   });
 });
