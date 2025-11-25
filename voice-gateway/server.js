@@ -15,14 +15,15 @@ const wss = new WebSocket.Server({ port: PORT });
 console.log("🚀 Voice Gateway WebSocket démarré sur ws://localhost:" + PORT);
 
 function createOpenAIConnection() {
-  const url = "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview";
-
-  return new WebSocket(url, {
-    headers: {
-      Authorization: `Bearer ${OPENAI_API_KEY}`,
-      "OpenAI-Beta": "realtime=v1",
-    },
-  });
+  return new WebSocket(
+    "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview",
+    {
+      headers: {
+        Authorization: `Bearer ${OPENAI_API_KEY}`,
+        "OpenAI-Beta": "realtime=v1",
+      },
+    }
+  );
 }
 
 wss.on("connection", (twilioWs) => {
@@ -30,39 +31,66 @@ wss.on("connection", (twilioWs) => {
 
   const ai = createOpenAIConnection();
   let aiReady = false;
-  const pendingEvents = []; // events reçus avant que OpenAI soit prêt
+  const pendingEvents = [];
 
-  // petite fonction utilitaire pour traiter un event Twilio
+  // --- TRAITEMENT DES EVENTS TWILIO ---
   function handleTwilioEvent(data) {
-    if (data.event === "start") {
+    const ev = data.event;
+
+    if (ev === "start") {
       console.log("▶️ Stream Twilio START");
-      ai.send(JSON.stringify({ type: "input_audio_buffer.start" }));
-    } else if (data.event === "media") {
+
+      // On efface l’ancien buffer audio
+      ai.send(JSON.stringify({ type: "input_audio_buffer.clear" }));
+      return;
+    }
+
+    if (ev === "media") {
+      // On push le flux audio μ-law 8kHz venant de Twilio
       ai.send(
         JSON.stringify({
           type: "input_audio_buffer.append",
           audio: data.media.payload,
         })
       );
-    } else if (data.event === "stop") {
+      return;
+    }
+
+    if (ev === "stop") {
       console.log("⏹ Stream Twilio STOP");
-      ai.send(JSON.stringify({ type: "input_audio_buffer.stop" }));
-      ai.send(JSON.stringify({ type: "response.create" }));
+
+      // On clôture le buffer
+      ai.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
+
+      // On demande une réponse vocale Alloy
+      ai.send(
+        JSON.stringify({
+          type: "response.create",
+          response: {
+            instructions:
+              "Réponds en voix Alloy, en français, très court. Tu es l'assistant vocal du food truck Call2Food.",
+            modalities: ["audio"],
+            audio: { voice: "alloy" },
+          },
+        })
+      );
+
+      return;
     }
   }
 
+  // --- Quand OpenAI est connecté ---
   ai.on("open", () => {
     console.log("🤖 OpenAI Realtime connecté");
     aiReady = true;
 
-    // config de session
+    // Configuration session
     ai.send(
       JSON.stringify({
         type: "session.update",
         session: {
           instructions:
-            "Tu es Call2Food, un assistant qui prend les commandes de pizzas et de sushis au téléphone en français. " +
-            "Sois clair, poli, et pose des questions pour construire la commande.",
+            "Tu es Call2Food. Tu prends des commandes de pizzas et sushis en français, brièvement, et tu poses des questions.",
           input_audio_format: "g711_ulaw",
           output_audio_format: "g711_ulaw",
           voice: "alloy",
@@ -70,18 +98,20 @@ wss.on("connection", (twilioWs) => {
       })
     );
 
-    // phrase de bienvenue
+    // message de bienvenue
     ai.send(
       JSON.stringify({
         type: "response.create",
         response: {
           instructions:
-            "Dis : 'Bonjour, ici Call2Food. Que puis-je préparer pour vous aujourd’hui ?'",
+            "Parle : 'Bonjour ici Call2Food. Que désirez-vous commander aujourd’hui ?'",
+          modalities: ["audio"],
+          audio: { voice: "alloy" },
         },
       })
     );
 
-    // on rejoue tous les events reçus pendant la connexion
+    // rejouer les events arrivés avant connexion OpenAI
     if (pendingEvents.length > 0) {
       console.log("📥 Relecture des events en attente :", pendingEvents.length);
       for (const ev of pendingEvents) {
@@ -92,21 +122,21 @@ wss.on("connection", (twilioWs) => {
   });
 
   ai.on("error", (err) => {
-    console.error("❌ Erreur OpenAI :", err);
+    console.error("⚠️ Erreur OpenAI :", err);
   });
 
   // --- Twilio → OpenAI ---
   twilioWs.on("message", (raw) => {
-    let data;
+    let data = null;
     try {
       data = JSON.parse(raw.toString());
-    } catch (e) {
-      console.error("JSON Twilio invalide :", e);
+    } catch (err) {
+      console.error("JSON Twilio invalide :", err);
       return;
     }
 
     if (!aiReady) {
-      console.log("⏳ OpenAI pas encore prêt, on met en attente event:", data.event);
+      console.log("⏳ OpenAI pas prêt → on met en attente:", data.event);
       pendingEvents.push(data);
       return;
     }
@@ -114,17 +144,18 @@ wss.on("connection", (twilioWs) => {
     handleTwilioEvent(data);
   });
 
-  // --- OpenAI → Twilio ---
+  // --- OpenAI → Twilio (audio retour) ---
   ai.on("message", (raw) => {
     let packet;
+
     try {
       packet = JSON.parse(raw.toString());
-    } catch (e) {
-      console.error("JSON OpenAI invalide :", e);
+    } catch (err) {
+      console.error("JSON OpenAI invalide :", err);
       return;
     }
 
-    if (packet.type === "response.audio.delta" && packet.delta) {
+    if (packet.type === "response.audio.delta") {
       if (twilioWs.readyState === WebSocket.OPEN) {
         twilioWs.send(
           JSON.stringify({
@@ -133,32 +164,30 @@ wss.on("connection", (twilioWs) => {
           })
         );
       }
-    } else if (packet.type === "response.completed") {
+    }
+
+    if (packet.type === "response.completed") {
       console.log("✅ Réponse OpenAI terminée");
-    } else if (packet.type === "error") {
-      console.error("⚠️ OpenAI error packet:", packet);
+    }
+
+    if (packet.type === "error") {
+      console.error("⚠️ OpenAI ERROR:", packet);
     }
   });
 
-  // fermetures propres
+  // --- Fermetures propres ---
   twilioWs.on("close", () => {
     console.log("❌ WebSocket Twilio fermé");
-    if (
-      ai.readyState === WebSocket.OPEN ||
-      ai.readyState === WebSocket.CONNECTING
-    ) {
+    try {
       ai.close();
-    }
+    } catch {}
   });
 
   ai.on("close", () => {
     console.log("🤖 Connexion OpenAI fermée");
-    if (
-      twilioWs.readyState === WebSocket.OPEN ||
-      twilioWs.readyState === WebSocket.CONNECTING
-    ) {
+    try {
       twilioWs.close();
-    }
+    } catch {}
   });
 
   twilioWs.on("error", (err) => {
