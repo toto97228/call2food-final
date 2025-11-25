@@ -5,6 +5,9 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
+console.log("🔍 OPENAI_API_KEY chargée ?", process.env.OPENAI_API_KEY ? "OUI" : "NON");
+
+
 const PORT = process.env.PORT || 8080;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
