@@ -39,3 +39,14 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+
+
+# dépendances
+node_modules/
+voice-gateway/node_modules/
+
+# secrets
+.env
+.env.local
+voice-gateway/.env
