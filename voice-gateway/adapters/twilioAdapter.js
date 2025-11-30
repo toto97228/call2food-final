@@ -3,6 +3,7 @@ const WebSocket = require('ws');
 const { createOpenAIRealtimeSession } = require('../openaiRealtimeCore');
 
 function initTwilioAdapter(server, { apiKey, model }) {
+  // WebSocket server partagé avec HTTP (Railway)
   const twilioWss = new WebSocket.Server({ server });
 
   twilioWss.on('connection', async (twilioWs) => {
@@ -10,6 +11,7 @@ function initTwilioAdapter(server, { apiKey, model }) {
 
     let streamSid = null;
 
+    // Création de la session Realtime OpenAI
     const session = await createOpenAIRealtimeSession({
       apiKey,
       model,
@@ -17,17 +19,27 @@ function initTwilioAdapter(server, { apiKey, model }) {
         if (!streamSid) return;
         if (twilioWs.readyState !== WebSocket.OPEN) return;
 
+        console.log(
+          '[Twilio] sending audio chunk to stream',
+          streamSid,
+          'size =',
+          deltaBase64.length
+        );
+
         const twilioMediaMsg = {
           event: 'media',
           streamSid,
           media: { payload: deltaBase64 },
         };
+
+        // Audio IA → Twilio
         twilioWs.send(JSON.stringify(twilioMediaMsg));
       },
     });
 
     const openaiWs = session.ws;
 
+    // Messages venant de Twilio (Media Streams)
     twilioWs.on('message', (data) => {
       let msg;
       try {
@@ -41,20 +53,26 @@ function initTwilioAdapter(server, { apiKey, model }) {
         case 'connected':
           console.log('[Twilio] connected');
           break;
+
         case 'start':
           console.log('[Twilio] start');
           streamSid = msg.start.streamSid;
           break;
+
         case 'media':
           // audio Twilio (g711 μ-law base64) → OpenAI
           session.appendAudio(msg.media.payload);
           break;
+
         case 'mark':
+          // pas utilisé pour l’instant
           break;
+
         case 'stop':
           console.log('[Twilio] stop, closing sockets');
           cleanup();
           break;
+
         default:
           break;
       }
@@ -88,3 +106,4 @@ function initTwilioAdapter(server, { apiKey, model }) {
 }
 
 module.exports = { initTwilioAdapter };
+
