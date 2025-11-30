@@ -8,104 +8,105 @@ function createOpenAIRealtimeSession({ apiKey, model, onAudioDelta }) {
       {
         headers: {
           Authorization: `Bearer ${apiKey}`,
-        },
+          "OpenAI-Beta": "realtime=v1"
+        }
       }
     );
 
-    ws.on('open', () => {
-      console.log('[OpenAI] WebSocket opened');
+    ws.on("open", () => {
+      console.log("[OpenAI] WebSocket opened");
 
-      // 1) Config de la session (audio + voix + VAD)
-      const sessionUpdate = {
-        type: 'session.update',
+      // 1) Mise à jour session : format strict
+      ws.send(JSON.stringify({
+        type: "session.update",
         session: {
-          type: 'realtime',
-          model,
-          output_modalities: ['audio'], // le modèle doit générer de l’audio
+          modalities: ["audio", "text"],
+          instructions:
+            "Tu es Call2Eat, un assistant vocal téléphonique. Parle français, phrases courtes.",
           audio: {
             input: {
-              format: { type: 'audio/pcmu' }, // Twilio = G.711 μ-law (PCMU)
-              turn_detection: { type: 'server_vad' },
+              format: "pcm_mulaw",
+              sample_rate: 8000,
+              turn_detection: { type: "server_vad" }
             },
             output: {
-              format: { type: 'audio/pcmu' },
-              voice: 'alloy',
-            },
-          },
-          instructions:
-            "Tu es Call2Eat, un assistant téléphonique pour prendre des commandes de pizza et sushi pour un food truck. " +
-            "Tu parles en français, tu restes très court dans tes réponses, et tu poses une question à la fois.",
-        },
-      };
+              format: "pcm_mulaw",
+              sample_rate: 8000,
+              voice: "alloy"
+            }
+          }
+        }
+      }));
 
-      ws.send(JSON.stringify(sessionUpdate));
-      console.log('[OpenAI] session.update envoyé');
+      console.log("[OpenAI] session.update envoyé");
 
-      // 2) Message de bienvenue (le bot parle en premier)
-      const initialConversationItem = {
-        type: 'conversation.item.create',
+      // 2) Création d'un item de conversation dans le bon format
+      ws.send(JSON.stringify({
+        type: "conversation.item.create",
         item: {
-          type: 'message',
-          role: 'user',
+          type: "message",
+          role: "user",
           content: [
             {
-              type: 'input_text',
-              text:
-                "Dis : « Bonjour, ici Call2Eat. Je peux prendre ta commande de pizzas ou de sushis. Qu'est-ce que tu veux manger ? »",
-            },
-          ],
-        },
-      };
+              type: "input_text",
+              text: "Dis uniquement : Bonjour, ici Call2Eat. Que souhaitez-vous commander ?"
+            }
+          ]
+        }
+      }));
 
-      ws.send(JSON.stringify(initialConversationItem));
-      console.log('[OpenAI] conversation.item.create (greeting) envoyé');
+      console.log("[OpenAI] conversation.item.create envoyé");
 
-      // 3) Demande explicite de réponse
-      ws.send(JSON.stringify({ type: 'response.create' }));
-      console.log('[OpenAI] response.create envoyé');
+      // 3) Demande explicite de réponse vocale
+      ws.send(JSON.stringify({
+        type: "response.create"
+      }));
 
-      // Objet retourné au twilioAdapter
+      console.log("[OpenAI] response.create envoyé");
+
       resolve({
         ws,
-        appendAudio: (base64Ulaw) => {
+        appendAudio: (base64Mulaw) => {
           if (ws.readyState !== WebSocket.OPEN) return;
-
-          const msg = {
-            type: 'input_audio_buffer.append',
-            audio: base64Ulaw,
-          };
-          ws.send(JSON.stringify(msg));
-        },
+          ws.send(JSON.stringify({
+            type: "input_audio_buffer.append",
+            audio: base64Mulaw
+          }));
+        }
       });
     });
 
-    ws.on('message', (data) => {
+    ws.on("message", (data) => {
       let msg;
       try {
         msg = JSON.parse(data.toString());
-      } catch (e) {
-        console.error('[OpenAI] JSON parse error', e, data.toString());
+      } catch {
         return;
       }
 
-      // Log minimal
-      if (msg.type === 'error') {
-        console.error('[OpenAI ERROR]', msg);
-      } else if (msg.type === 'response.output_audio.delta') {
-        // Audio sortant vers Twilio
+      if (msg.type === "response.output_audio.delta") {
         if (msg.delta && onAudioDelta) {
+          console.log("[OpenAI] audio delta", msg.delta.length);
           onAudioDelta(msg.delta);
         }
       }
+
+      if (msg.type === "response.completed") {
+        console.log("[OpenAI] response.completed");
+      }
+
+      if (msg.type === "error") {
+        console.error("[OpenAI ERROR]", msg);
+      }
     });
 
-    ws.on('error', (err) => {
-      console.error('[OpenAI ERROR]', err);
+    ws.on("close", (code, reason) => {
+      console.log("[OpenAI] WebSocket closed", code, reason.toString());
+    });
+
+    ws.on("error", (err) => {
+      console.error("[OpenAI WS ERROR]", err);
       reject(err);
-    });
-
-    ws.on('close', (code, reason) => {
-      console.log('[OpenAI] WebSocket closed', code, reason.toString());
     });
   });
 }
