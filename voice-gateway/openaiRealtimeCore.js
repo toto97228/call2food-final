@@ -5,6 +5,7 @@ const REALTIME_URL = 'wss://api.openai.com/v1/realtime';
 
 /**
  * Crée une session Realtime OpenAI.
+ * - Configure la session pour audio + texte.
  * - Envoie un message vocal de bienvenue dès l'ouverture.
  * - Permet d'envoyer l'audio Twilio vers OpenAI via appendAudio().
  * - Renvoie les chunks audio via onAudioDelta (base64 G.711 μ-law).
@@ -47,13 +48,13 @@ function createOpenAIRealtimeSession({ apiKey, model, onAudioDelta }) {
     ws.on('open', () => {
       console.log('[OpenAI] WebSocket opened');
 
-      // 1) Configuration de la session : on demande explicitement de l'audio
+      // 1) Configuration de la session : audio + texte
       const sessionUpdate = {
         type: 'session.update',
         session: {
           model,
           voice: 'alloy',
-          modalities: ['audio'], // on ne veut que de l'audio au début
+          modalities: ['audio', 'text'], // ✅ combinaison supportée
           input_audio_format: 'g711_ulaw',
           output_audio_format: 'g711_ulaw',
           instructions:
@@ -67,7 +68,7 @@ function createOpenAIRealtimeSession({ apiKey, model, onAudioDelta }) {
       const greet = {
         type: 'response.create',
         response: {
-          modalities: ['audio'], // on force la sortie audio
+          modalities: ['audio', 'text'], // ✅ idem ici
           instructions:
             'Dis exactement: "Bonjour, bienvenue chez Call2Eat. Que souhaitez-vous commander, pizza ou sushi ?" en français.',
         },
@@ -95,8 +96,6 @@ function createOpenAIRealtimeSession({ apiKey, model, onAudioDelta }) {
         console.log('[OpenAI] response completed');
       } else if (msg.type === 'error') {
         console.error('[OpenAI ERROR]', msg.error || msg);
-      } else {
-        // autres events ignorés pour l'instant
       }
     });
 
