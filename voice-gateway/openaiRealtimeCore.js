@@ -5,12 +5,15 @@ const REALTIME_URL = 'wss://api.openai.com/v1/realtime';
 
 /**
  * Crée une session Realtime OpenAI.
- * @param {Object} params
- * @param {string} params.apiKey - Clé API OpenAI (venant de process.env.OPENAI_API_KEY)
- * @param {string} params.model  - Nom du modèle Realtime (ex: gpt-4o-realtime-preview)
- * @param {function} params.onAudioDelta - callback(base64G711) appelé à chaque chunk audio
+ * - Envoie un message vocal de bienvenue dès l'ouverture.
+ * - Permet d'envoyer l'audio Twilio vers OpenAI via appendAudio().
+ * - Renvoie les chunks audio via onAudioDelta (base64 G.711 μ-law).
  */
 function createOpenAIRealtimeSession({ apiKey, model, onAudioDelta }) {
+  if (!apiKey) {
+    throw new Error('OPENAI_API_KEY manquant');
+  }
+
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(
       `${REALTIME_URL}?model=${encodeURIComponent(model)}`,
@@ -24,9 +27,6 @@ function createOpenAIRealtimeSession({ apiKey, model, onAudioDelta }) {
 
     const session = {
       ws,
-      /**
-       * Envoie de l’audio G.711 μ-law (Twilio) vers OpenAI, encodé en base64.
-       */
       appendAudio(base64Mulaw) {
         if (ws.readyState !== WebSocket.OPEN) return;
 
@@ -36,7 +36,6 @@ function createOpenAIRealtimeSession({ apiKey, model, onAudioDelta }) {
             audio: base64Mulaw,
           })
         );
-        // On laisse le VAD serveur décider quand la phrase est terminée.
       },
       close() {
         try {
@@ -48,40 +47,32 @@ function createOpenAIRealtimeSession({ apiKey, model, onAudioDelta }) {
     ws.on('open', () => {
       console.log('[OpenAI] WebSocket opened');
 
-      // Configuration de la session Realtime
+      // 1) Configuration de la session : on demande explicitement de l'audio
       const sessionUpdate = {
         type: 'session.update',
         session: {
           model,
           voice: 'alloy',
-          modalities: ['text', 'audio'],
+          modalities: ['audio'], // on ne veut que de l'audio au début
           input_audio_format: 'g711_ulaw',
           output_audio_format: 'g711_ulaw',
           instructions:
-            "Tu es Call2Eat, un assistant de prise de commande pour un food truck. " +
-            "Parle en français, phrases courtes, ton chaleureux. " +
-            'Pose une question à la fois. Demande les pizzas ou sushis, puis les détails de la commande.',
-          turn_detection: {
-            type: 'server_vad',
-            threshold: 0.5,
-            prefix_padding_ms: 300,
-            silence_duration_ms: 500,
-          },
+            "Tu es l'assistant vocal du food truck Call2Eat. " +
+            "Tu parles en français, très court et clair.",
         },
       };
-
       ws.send(JSON.stringify(sessionUpdate));
 
-      // Premier message vocal immédiat (greeting)
-      ws.send(
-        JSON.stringify({
-          type: 'response.create',
-          response: {
-            instructions:
-              'Dis juste: "Bonjour, vous voulez plutôt pizza ou sushi ?" en français.',
-          },
-        })
-      );
+      // 2) Premier message vocal forcé : phrase de bienvenue
+      const greet = {
+        type: 'response.create',
+        response: {
+          modalities: ['audio'], // on force la sortie audio
+          instructions:
+            'Dis exactement: "Bonjour, bienvenue chez Call2Eat. Que souhaitez-vous commander, pizza ou sushi ?" en français.',
+        },
+      };
+      ws.send(JSON.stringify(greet));
 
       resolve(session);
     });
@@ -95,45 +86,26 @@ function createOpenAIRealtimeSession({ apiKey, model, onAudioDelta }) {
         return;
       }
 
-      switch (msg.type) {
-        case 'response.audio.delta':
-          if (msg.delta && onAudioDelta) {
-            console.log(
-              '[OpenAI] audio delta size =',
-              msg.delta.length
-            );
-            onAudioDelta(msg.delta);
-          }
-          break;
-
-        case 'response.completed':
-          console.log(
-            '[OpenAI] response completed',
-            msg.response && msg.response.id
-          );
-          break;
-
-        case 'input_audio_buffer.speech_started':
-          console.log('[OpenAI] speech started');
-          break;
-
-        case 'input_audio_buffer.speech_stopped':
-          console.log('[OpenAI] speech stopped, asking for reply');
-          // Quand OpenAI détecte la fin de ta phrase, on demande une réponse
-          ws.send(JSON.stringify({ type: 'response.create' }));
-          break;
-
-        case 'error':
-          console.error('[OpenAI ERROR]', msg.error || msg);
-          break;
-
-        default:
-        // autres événements ignorés pour l’instant
+      if (msg.type === 'response.audio.delta' && msg.delta) {
+        console.log('[OpenAI] audio delta size =', msg.delta.length);
+        if (typeof onAudioDelta === 'function') {
+          onAudioDelta(msg.delta);
+        }
+      } else if (msg.type === 'response.completed') {
+        console.log('[OpenAI] response completed');
+      } else if (msg.type === 'error') {
+        console.error('[OpenAI ERROR]', msg.error || msg);
+      } else {
+        // autres events ignorés pour l'instant
       }
     });
 
     ws.on('close', (code, reason) => {
-      console.log('[OpenAI] WebSocket closed', code, reason.toString());
+      console.log(
+        '[OpenAI] WebSocket closed',
+        code,
+        reason ? reason.toString() : ''
+      );
     });
 
     ws.on('error', (err) => {
