@@ -9,8 +9,7 @@ const { initLiveKitAdapter } = require('./adapters/livekitAdapter');
 // === Variables ===
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
-const OPENAI_REALTIME_MODEL =
-  process.env.OPENAI_REALTIME_MODEL || 'gpt-4o-realtime-preview-2024-12-17';
+const OPENAI_REALTIME_MODEL = process.env.OPENAI_REALTIME_MODEL || "gpt-4o-realtime-preview-2024-12-17";
 
 const PORT = process.env.PORT ? Number(process.env.PORT) : 8080;
 

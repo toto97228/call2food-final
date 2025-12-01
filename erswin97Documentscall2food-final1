@@ -1,0 +1,8 @@
+[33mcommit 79af0e19b4e18645f1d4c0191a34c63e9b86271a[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m, [m[1;31morigin/main[m[33m)[m
+Author: toto97228 <131248770+toto97228@users.noreply.github.com>
+Date:   Mon Dec 1 02:08:17 2025 +0100
+
+    Use correct response.audio.delta event for Realtime audio
+
+ voice-gateway/openaiRealtimeCore.js | 155 [32m+++++++++++++++++++++[m[31m---------------[m
+ 1 file changed, 92 insertions(+), 63 deletions(-)
