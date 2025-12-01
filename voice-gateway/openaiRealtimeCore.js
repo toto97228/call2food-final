@@ -2,80 +2,47 @@
 const WebSocket = require("ws");
 
 function createOpenAIRealtimeSession({ apiKey, model, onAudioDelta }) {
-  if (!apiKey) {
-    throw new Error("OPENAI_API_KEY manquant");
-  }
-
   return new Promise((resolve, reject) => {
-    const ws = new WebSocket(
-      `wss://api.openai.com/v1/realtime?model=${encodeURIComponent(model)}`,
-      {
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          "OpenAI-Beta": "realtime=v1",
-        },
-      }
-    );
+    const ws = new WebSocket("wss://api.openai.com/v1/realtime", {
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "OpenAI-Beta": "realtime=v1",
+      },
+    });
 
     ws.on("open", () => {
       console.log("[OpenAI] WebSocket opened");
 
-      // Configuration de session
+      // === Configure la session ===
       ws.send(
         JSON.stringify({
           type: "session.update",
           session: {
-            model,
+            model, // <== le modèle vient du .env / server.js
             modalities: ["audio", "text"],
-            voice: "alloy",
-            input_audio_format: "g711_ulaw",
-            output_audio_format: "g711_ulaw",
-            turn_detection: { type: "server_vad" },
             instructions:
-              "Tu es l'assistant vocal Call2Eat. Parle français, réponses courtes.",
+              "Tu es l'assistant vocal Call2Eat. Parle français, phrases courtes et directes.",
+            voice: "alloy",
           },
         })
       );
       console.log("[OpenAI] session.update envoyé");
 
-      // Ajout d’un message utilisateur
-      ws.send(
-        JSON.stringify({
-          type: "conversation.item.create",
-          item: {
-            type: "message",
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text:
-                  "Salue le client de Call2Eat et demande-lui ce qu'il veut commander.",
-              },
-            ],
-          },
-        })
-      );
-      console.log("[OpenAI] conversation.item.create envoyé");
-
-      // Demander la réponse
-      ws.send(
-        JSON.stringify({
-          type: "response.create",
-          response: { modalities: ["audio", "text"] },
-        })
-      );
-      console.log("[OpenAI] response.create envoyé");
-
-      // Retour API Twilio
       resolve({
         ws,
-        appendAudio: (base64Ulaw) => {
-          if (ws.readyState !== WebSocket.OPEN) return;
-
+        appendAudio: (base64Audio) => {
           ws.send(
             JSON.stringify({
               type: "input_audio_buffer.append",
-              audio: base64Ulaw,
+              audio: base64Audio,
+            })
+          );
+        },
+
+        commitAudio: () => {
+          ws.send(
+            JSON.stringify({
+              type: "input_audio_buffer.commit",
             })
           );
         },
@@ -85,42 +52,36 @@ function createOpenAIRealtimeSession({ apiKey, model, onAudioDelta }) {
     ws.on("message", (data) => {
       let msg;
       try {
-        msg = JSON.parse(data.toString());
-      } catch (err) {
-        console.error("[OpenAI] JSON parse error", err);
+        msg = JSON.parse(data);
+      } catch (e) {
+        console.error("[OpenAI] JSON parse error", e, data);
         return;
       }
 
-      // LOG COMPLET POUR DEBUG
-      const short = JSON.stringify(msg).slice(0, 300);
-      console.log("[OpenAI EVENT]", msg.type, short);
-
-      // Audio provenant d'OpenAI
-      if (
-        (msg.type === "response.audio.delta" ||
-          msg.type === "response.output_audio.delta") &&
-        msg.delta
-      ) {
-        console.log("[OpenAI] audio delta =", msg.delta.length);
-        if (onAudioDelta) onAudioDelta(msg.delta);
+      // Log tous les events OpenAI
+      if (msg.type) {
+        console.log("[OpenAI EVENT]", msg.type, JSON.stringify(msg));
       }
 
-      if (msg.type === "error") {
-        console.error("[OpenAI ERROR]", msg.error || msg);
+      // === Événements audio ===
+      if (msg.type === "response.audio.delta" && msg.delta) {
+        if (onAudioDelta) {
+          onAudioDelta(msg.delta);
+        }
       }
-    });
 
-    ws.on("close", (code, reason) => {
-      console.log(
-        "[OpenAI] WebSocket closed",
-        code,
-        reason ? reason.toString() : ""
-      );
+      if (msg.type === "response.done") {
+        console.log("[OpenAI] Réponse terminée");
+      }
     });
 
     ws.on("error", (err) => {
-      console.error("[OpenAI WS ERROR]", err);
+      console.error("[OpenAI ERROR]", err);
       reject(err);
+    });
+
+    ws.on("close", (code, reason) => {
+      console.log(`[OpenAI] WebSocket closed ${code} ${reason || ""}`);
     });
   });
 }
