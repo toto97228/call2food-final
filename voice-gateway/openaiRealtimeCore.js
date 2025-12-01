@@ -3,7 +3,7 @@ const WebSocket = require('ws');
 
 function createOpenAIRealtimeSession({
   apiKey,
-  model = 'gpt-4o-audio-preview-2024-12-17', // fallback audio correct
+  model = 'gpt-4o-audio-preview-2024-12-17',
   onAudioDelta,
 }) {
   const ws = new WebSocket('wss://api.openai.com/v1/realtime', {
@@ -20,7 +20,7 @@ function createOpenAIRealtimeSession({
       JSON.stringify({
         type: 'session.update',
         session: {
-          model, // ← on utilise bien le paramètre
+          model,
           modalities: ['audio', 'text'],
           instructions:
             "Tu es l'assistant vocal Call2Eat. Parle français, réponses courtes.",
@@ -31,7 +31,6 @@ function createOpenAIRealtimeSession({
     console.log('[OpenAI] session.update envoyé');
   });
 
-  // Réception des events venant d’OpenAI
   ws.on('message', (data) => {
     let msg;
     try {
@@ -44,14 +43,12 @@ function createOpenAIRealtimeSession({
     const short = JSON.stringify(msg).slice(0, 200);
     console.log('[OpenAI EVENT]', msg.type, short);
 
-    // Audio sortant
     if (msg.type === 'response.audio.delta') {
       if (msg.delta && onAudioDelta) {
         onAudioDelta(msg.delta);
       }
     }
 
-    // Erreurs
     if (msg.type === 'error') {
       console.error('[OpenAI ERROR]', msg);
     }
@@ -65,8 +62,18 @@ function createOpenAIRealtimeSession({
     console.error('[OpenAI WS ERROR]', err);
   });
 
-  // Fonction appelée par Twilio pour pousser l’audio entrant
+  // Twilio → OpenAI (audio entrant)
   function appendAudio(ulawBase64) {
+    // ✅ FIX: ne rien envoyer tant que le WS n'est pas ouvert
+    if (ws.readyState !== WebSocket.OPEN) {
+      console.warn(
+        '[OpenAI] appendAudio ignoré: WebSocket not OPEN (state =',
+        ws.readyState,
+        ')'
+      );
+      return;
+    }
+
     ws.send(
       JSON.stringify({
         type: 'input_audio_buffer.append',
