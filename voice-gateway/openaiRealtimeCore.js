@@ -8,14 +8,12 @@ const WebSocket = require('ws');
  */
 function createOpenAIRealtimeSession({
   apiKey,
-  model = process.env.OPENAI_REALTIME_MODEL || 'gpt-4o-realtime-preview-2024-12-17',
+  model = process.env.OPENAI_REALTIME_MODEL || 'gpt-4o-realtime-preview',
   onAudioDelta,
 }) {
   return new Promise((resolve, reject) => {
     // ✅ le modèle est passé dans l’URL comme demandé par OpenAI
-    const url = `wss://api.openai.com/v1/realtime?model=${encodeURIComponent(
-      model
-    )}`;
+   const url = `wss://api.openai.com/v1/realtime?model=${encodeURIComponent(model)}`;
 
     console.log('[OpenAI] connexion WebSocket vers', url);
 

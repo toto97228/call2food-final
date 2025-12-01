@@ -8,7 +8,7 @@ const { initLiveKitAdapter } = require('./adapters/livekitAdapter');
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_REALTIME_MODEL =
-  process.env.OPENAI_REALTIME_MODEL || 'gpt-4o-realtime-preview-2024-12-17';
+  process.env.OPENAI_REALTIME_MODEL || 'gpt-4o-realtime-preview';
 
 const PORT = process.env.PORT ? Number(process.env.PORT) : 8080;
 const PROVIDER = (process.env.PROVIDER || 'twilio').toLowerCase();
