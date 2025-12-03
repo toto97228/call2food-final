@@ -1,26 +1,96 @@
+/* Active Tailwind CSS v4 */
 @import "tailwindcss";
 
+/* === Thème global (clair / sombre) === */
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #fdf5ea;      /* fond clair type Call2Food */
+  --foreground: #1f2933;      /* texte sombre lisible */
+  --card: #ffffff;
+  --card-border: rgba(0, 0, 0, 0.06);
+  --accent: #f97316;          /* orange boutons */
+  --accent-soft: #fff4e6;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+/* Variante dark quand on ajoute la classe .dark sur <html> */
+
+html.dark {
+  --background: #020617;
+  --foreground: #e5e7eb;
+  --card: #020617;
+  --card-border: rgba(148, 163, 184, 0.3);
+  --accent: #fb923c;
+  --accent-soft: rgba(251, 146, 60, 0.12);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+/* Reset de base */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
 }
 
 body {
-  background: var(--background);
+  min-height: 100vh;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    sans-serif;
+  background-color: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+}
+
+/* Quelques helpers pour le dashboard */
+
+.dashboard-body {
+  background: radial-gradient(circle at top left, #ffe0b2, #fdf5ea 35%, #ffffff);
+}
+
+html.dark .dashboard-body {
+  background: radial-gradient(circle at top left, #0f172a, #020617 40%, #000000);
+}
+
+.card {
+  border-radius: 1.5rem;
+  background-color: var(--card);
+  border: 1px solid var(--card-border);
+}
+
+html.dark .card {
+  backdrop-filter: blur(10px);
+}
+
+.badge-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.1rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+/* Utile si tu as des tableaux (Commandes vocales, Clients, etc.) */
+
+.table-simple {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.table-simple th,
+.table-simple td {
+  padding: 0.75rem 1rem;
+  text-align: left;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.25);
+}
+
+.table-simple th {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  opacity: 0.8;
 }
