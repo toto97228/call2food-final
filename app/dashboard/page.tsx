@@ -9,6 +9,7 @@ type OrderRow = {
   total: number | null;
   created_at: string | null;
   delivery_address?: string | null;
+  needs_human: boolean | null;
 };
 
 type ClientRow = {
@@ -57,7 +58,7 @@ export default async function DashboardPage() {
   const { data: ordersData, error: ordersError } = await supabaseAdmin
     .from('orders')
     .select(
-      'id, client_id, status, note, total, created_at, delivery_address'
+      'id, client_id, status, note, total, created_at, delivery_address, needs_human',
     )
     .order('created_at', { ascending: false });
 
@@ -76,7 +77,7 @@ export default async function DashboardPage() {
   const orders: OrderRow[] = (ordersData ?? []) as OrderRow[];
 
   const clientIds = Array.from(new Set(orders.map((o) => o.client_id))).filter(
-    Boolean
+    Boolean,
   );
 
   let clientsById = new Map<string, ClientRow>();
@@ -179,7 +180,7 @@ export default async function DashboardPage() {
         </div>
       </header>
 
-      {/* Contenu (le reste est identique à avant) */}
+      {/* Contenu */}
       <div className="mx-auto max-w-6xl px-4 py-8 space-y-6">
         {/* Statistiques hautes */}
         <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -253,7 +254,7 @@ export default async function DashboardPage() {
                       {day}
                     </span>
                   </div>
-                )
+                ),
               )}
             </div>
           </div>
@@ -275,9 +276,16 @@ export default async function DashboardPage() {
                     })()}
                   </div>
                   <div>
-                    <div className="text-sm font-medium">
-                      {clientsById.get(derniereCommande.client_id)?.name ??
-                        'Client inconnu'}
+                    <div className="flex items-center gap-2">
+                      <div className="text-sm font-medium">
+                        {clientsById.get(derniereCommande.client_id)?.name ??
+                          'Client inconnu'}
+                      </div>
+                      {derniereCommande.needs_human && (
+                        <span className="inline-flex items-center rounded-full bg-rose-600/15 text-rose-700 border border-rose-300 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide dark:bg-rose-500/20 dark:text-rose-100 dark:border-rose-400">
+                          👤 Besoin humain
+                        </span>
+                      )}
                     </div>
                     <div className="text-xs text-orange-700/80 dark:text-slate-400">
                       {formatDateTime(derniereCommande.created_at)}
@@ -372,7 +380,14 @@ export default async function DashboardPage() {
                           {formatDateTime(order.created_at)}
                         </td>
                         <td className="py-2 pr-3 whitespace-nowrap">
-                          {client?.name ?? 'Client inconnu'}
+                          <div className="flex items-center gap-2">
+                            <span>{client?.name ?? 'Client inconnu'}</span>
+                            {order.needs_human && (
+                              <span className="inline-flex items-center rounded-full bg-rose-600/15 text-rose-700 border border-rose-300 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide dark:bg-rose-500/20 dark:text-rose-100 dark:border-rose-400">
+                                👤 Besoin humain
+                              </span>
+                            )}
+                          </div>
                         </td>
                         <td className="py-2 pr-3 whitespace-nowrap">
                           {client?.phone ?? '—'}

@@ -1,3 +1,5 @@
+// app/kitchen/page.tsx
+import KitchenBoard from './KitchenBoard';
 import { supabaseAdmin } from '@/lib/supabaseAdmin';
 
 type OrderRow = {
@@ -6,6 +8,7 @@ type OrderRow = {
   status: string | null;
   note: string | null;
   created_at: string | null;
+  needs_human: boolean | null;
 };
 
 type ClientRow = {
@@ -27,21 +30,30 @@ type ProductRow = {
   name: string | null;
 };
 
-function formatTime(dateString: string | null): string {
-  if (!dateString) return '';
-  const d = new Date(dateString);
-  if (Number.isNaN(d.getTime())) return dateString;
-  return d.toLocaleTimeString('fr-FR', {
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-}
+export type KitchenOrderItem = {
+  id: string;
+  product_id: number;
+  qty: number;
+  unit_price: number;
+  product_name: string | null;
+};
+
+export type KitchenOrder = {
+  id: string;
+  status: string | null;
+  note: string | null;
+  created_at: string | null;
+  client_name: string | null;
+  client_phone: string | null;
+  needs_human: boolean; // <- important pour le badge
+  items: KitchenOrderItem[];
+};
 
 export default async function KitchenPage() {
   // 1) Récupérer les commandes (les plus récentes d'abord)
   const { data: ordersData, error: ordersError } = await supabaseAdmin
     .from('orders')
-    .select('id, client_id, status, note, created_at')
+    .select('id, client_id, status, note, created_at, needs_human')
     .order('created_at', { ascending: false });
 
   if (ordersError) {
@@ -86,9 +98,7 @@ export default async function KitchenPage() {
   }
 
   // 2) Clients
-  const clientIds = Array.from(new Set(orders.map((o) => o.client_id))).filter(
-    Boolean
-  );
+  const clientIds = Array.from(new Set(orders.map((o) => o.client_id))).filter(Boolean);
 
   let clientsById = new Map<string, ClientRow>();
   if (clientIds.length > 0) {
@@ -98,9 +108,7 @@ export default async function KitchenPage() {
       .in('id', clientIds);
 
     if (clientsData) {
-      clientsById = new Map(
-        (clientsData as ClientRow[]).map((c) => [c.id, c])
-      );
+      clientsById = new Map((clientsData as ClientRow[]).map((c) => [c.id, c]));
     }
   }
 
@@ -130,19 +138,37 @@ export default async function KitchenPage() {
     if (productsError) {
       console.error('Kitchen productsError:', productsError);
     } else if (productsData) {
-      productsById = new Map(
-        (productsData as ProductRow[]).map((p) => [p.id, p])
-      );
+      productsById = new Map((productsData as ProductRow[]).map((p) => [p.id, p]));
     }
   }
 
-  // 5) Regrouper les items par commande
-  const itemsByOrderId = new Map<string, OrderItemRow[]>();
-  for (const item of items) {
-    const list = itemsByOrderId.get(item.order_id) ?? [];
-    list.push(item);
-    itemsByOrderId.set(item.order_id, list);
-  }
+  // 5) Construire la structure simple pour le composant client
+  const kitchenOrders: KitchenOrder[] = orders.map((order) => {
+    const client = clientsById.get(order.client_id);
+    const orderItems = items.filter((i) => i.order_id === order.id);
+
+    const mappedItems: KitchenOrderItem[] = orderItems.map((item) => {
+      const product = productsById.get(item.product_id);
+      return {
+        id: item.id,
+        product_id: item.product_id,
+        qty: item.qty,
+        unit_price: item.unit_price,
+        product_name: product?.name ?? null,
+      };
+    });
+
+    return {
+      id: order.id,
+      status: order.status,
+      note: order.note,
+      created_at: order.created_at,
+      client_name: client?.name ?? null,
+      client_phone: client?.phone ?? null,
+      needs_human: order.needs_human ?? false,
+      items: mappedItems,
+    };
+  });
 
   return (
     <main className="min-h-screen bg-slate-950 text-slate-50 flex flex-col">
@@ -155,7 +181,7 @@ export default async function KitchenPage() {
           <div>
             <div className="text-sm font-semibold">Vue Cuisine – Call2Eat</div>
             <div className="text-xs text-slate-400">
-              Commandes à préparer (ordre anti-chronologique)
+              Commandes à préparer (ordre anti-chronologique – réorganisation locale possible)
             </div>
           </div>
         </div>
@@ -167,93 +193,10 @@ export default async function KitchenPage() {
         </a>
       </header>
 
-      {/* Liste des commandes */}
+      {/* Liste des commandes en composant client */}
       <div className="flex-1 px-4 py-4 overflow-y-auto">
-        <div className="mx-auto max-w-5xl grid grid-cols-1 md:grid-cols-2 gap-4">
-          {orders.map((order) => {
-            const client = clientsById.get(order.client_id);
-            const orderItems = itemsByOrderId.get(order.id) ?? [];
-
-            return (
-              <div
-                key={order.id}
-                className="rounded-2xl bg-slate-900 border border-slate-800 p-4 shadow-lg"
-              >
-                {/* En-tête commande */}
-                <div className="flex items-center justify-between mb-2">
-                  <div>
-                    <div className="text-xs uppercase tracking-wide text-slate-400">
-                      Commande
-                    </div>
-                    <div className="text-lg font-semibold">
-                      {client?.name ?? 'Client inconnu'}
-                    </div>
-                  </div>
-                  <div className="text-right">
-                    <div className="text-xs text-slate-400">
-                      {formatTime(order.created_at)}
-                    </div>
-                    <div className="text-xs text-slate-300">
-                      {client?.phone ?? '—'}
-                    </div>
-                  </div>
-                </div>
-
-                {/* Items */}
-                <div className="mt-3 space-y-1">
-                  {orderItems.length === 0 && (
-                    <p className="text-sm text-slate-400">
-                      Aucun détail d&apos;articles.
-                    </p>
-                  )}
-
-                  {orderItems.map((item) => {
-                    const product = productsById.get(item.product_id);
-                    return (
-                      <div
-                        key={item.id}
-                        className="flex items-center justify-between text-sm"
-                      >
-                        <div className="font-semibold">
-                          {item.qty} × {product?.name ?? `Produit #${item.product_id}`}
-                        </div>
-                        <div className="text-slate-400 text-xs">
-                          {item.unit_price.toFixed(2)} €
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-
-                {/* Note */}
-                {order.note && (
-                  <div className="mt-3 rounded-xl bg-slate-800 px-3 py-2 text-xs text-amber-200 border border-amber-400/40">
-                    <span className="font-semibold">Note cuisine :</span>{' '}
-                    {order.note}
-                  </div>
-                )}
-
-                {/* Statut */}
-                <div className="mt-3 flex items-center justify-between text-xs">
-                  <span className="inline-flex items-center rounded-full border border-slate-700 px-2 py-1">
-                    <span
-                      className={`mr-1 h-1.5 w-1.5 rounded-full ${
-                        order.status === 'new'
-                          ? 'bg-amber-400'
-                          : order.status === 'confirmed'
-                          ? 'bg-emerald-400'
-                          : 'bg-slate-400'
-                      }`}
-                    />
-                    {order.status ?? '—'}
-                  </span>
-                  <span className="text-slate-400">
-                    ID courte : {order.id.slice(0, 8)}…
-                  </span>
-                </div>
-              </div>
-            );
-          })}
+        <div className="mx-auto max-w-5xl">
+          <KitchenBoard initialOrders={kitchenOrders} />
         </div>
       </div>
     </main>

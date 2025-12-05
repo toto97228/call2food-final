@@ -1,5 +1,8 @@
 // voice-gateway/aiOrderParser.js
 
+import type { ParsedOrder } from '../lib/aiOrderParser';
+
+
 const BACKEND_BASE_URL =
   process.env.BACKEND_BASE_URL || 'http://localhost:3000';
 
@@ -14,17 +17,18 @@ const BACKEND_BASE_URL =
  *   ]
  * }
  */
-async function handleFinalAiOrder(orderPayload) {
+async function handleFinalAiOrder(orderPayload: ParsedOrder) {
+
   try {
     console.log('🧾 handleFinalAiOrder reçu :', orderPayload);
 
     // Validation minimale
     if (
-      !orderPayload ||
-      !orderPayload.client_phone ||
-      !Array.isArray(orderPayload.items) ||
-      orderPayload.items.length === 0
-    ) {
+  !orderPayload ||
+  !orderPayload.phone_number ||
+  !Array.isArray(orderPayload.items) ||
+  orderPayload.items.length === 0
+) {
       console.error('❌ Payload de commande invalide', orderPayload);
       return { ok: false, error: 'invalid_order_payload' };
     }

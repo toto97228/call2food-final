@@ -1,87 +1,81 @@
 // app/api/voice/route.ts
-
 import { NextRequest, NextResponse } from 'next/server';
 import { parseVoiceOrder } from '@/lib/aiOrderParser';
 
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json().catch(() => null);
+    const body = await req.json();
 
-    if (!body) {
-      return NextResponse.json(
-        { error: 'invalid_json_body' },
-        { status: 400 },
-      );
-    }
+    const fromNumber = body.from_number as string | undefined;
+    const speechResult = body.speech_result as string | undefined;
 
-    // Adapte ici aux champs que Twilio t’envoie réellement
-    const phoneNumber: string =
-      body.from_number || body.phone_number || body.From || '';
-    const transcript: string =
-      body.speech_result || body.transcript || body.SpeechResult || '';
-
-    if (!phoneNumber || !transcript) {
+    if (!fromNumber || !speechResult) {
       return NextResponse.json(
         {
-          error: 'missing_phone_or_transcript',
-          details:
-            'Champs attendus: from_number / phone_number / From et speech_result / transcript / SpeechResult',
+          error: 'invalid_body',
+          details: 'from_number and speech_result are required',
         },
         { status: 400 },
       );
     }
 
-    // 1) Utiliser l’IA pour parser la commande
-    const parsed = await parseVoiceOrder({ phoneNumber, transcript });
-
-    // 2) Envoyer vers /api/orders (la route qu’on a déjà testée)
-    const baseUrl =
-      process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000';
-
-    const orderPayload = {
-      phone_number: parsed.phone_number,
-      client_name: parsed.client_name,
-      items: parsed.items,
-      notes: parsed.notes,
-      source: parsed.source,
-      raw_transcript: parsed.raw_transcript,
-      needs_human: parsed.needs_human ?? false,
-    };
-
-    const res = await fetch(`${baseUrl}/api/orders`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(orderPayload),
+    // 1) Parsing avec DeepSeek / OpenAI / Mock
+    const parsed = await parseVoiceOrder({
+      phoneNumber: fromNumber,
+      transcript: speechResult,
     });
 
-    if (!res.ok) {
-      const text = await res.text();
-      console.error('Erreur /api/orders :', text);
+    // 2) Création de la commande via /api/orders
+    const origin = req.nextUrl.origin; // ex: http://localhost:3000
+    const ordersUrl = `${origin}/api/orders`;
+
+    const orderRes = await fetch(ordersUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        phone_number: parsed.phone_number,
+        client_name: parsed.client_name,
+        items: parsed.items,
+        notes: parsed.notes ?? null,
+        source: 'twilio',
+        raw_transcript: parsed.raw_transcript,
+        needs_human: parsed.needs_human,
+        engine: parsed.engine,
+      }),
+    });
+
+    const orderJson = await orderRes.json();
+
+    if (!orderRes.ok) {
+      console.error('/api/orders error from /api/voice:', orderJson);
       return NextResponse.json(
-        { error: 'orders_api_failed', details: text },
+        { error: 'order_create_failed', details: orderJson },
         { status: 500 },
       );
     }
 
-    const createdOrder = await res.json();
-
+    // 3) Réponse finale avec engine pour debug
     return NextResponse.json(
       {
-        status: 'ok',
-        order: createdOrder,
+        engine: parsed.engine,
+        needs_human: parsed.needs_human,
+        parsed_order: {
+          phone_number: parsed.phone_number,
+          client_name: parsed.client_name,
+          items: parsed.items,
+          notes: parsed.notes ?? null,
+        },
+        order: orderJson.order ?? null,
       },
       { status: 200 },
     );
   } catch (err: any) {
     console.error('POST /api/voice exception:', err);
     return NextResponse.json(
-      { error: 'unexpected_error', details: err?.message ?? String(err) },
+      { error: 'unexpected_error', details: String(err?.message ?? err) },
       { status: 500 },
     );
   }
-}
-
-// Optionnel : tu peux garder un GET de test si tu veux
-export async function GET() {
-  return NextResponse.json({ status: 'voice_api_ok' });
 }

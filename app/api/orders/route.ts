@@ -13,7 +13,7 @@ type CreateOrderBody = {
   client_name?: string | null;
   items: CreateOrderItemInput[];
   notes?: string | null;
-  source?: 'twilio' | 'web' | 'manual'; // pour l'instant on ne le stocke pas
+  source?: 'twilio' | 'web' | 'manual'; // pour info uniquement, pas stocké
   raw_transcript?: string | null;       // pas encore stocké en base
   scheduled_for?: string | null;        // pas encore stocké en base
 };
@@ -75,9 +75,10 @@ export async function POST(req: NextRequest) {
     client_name,
     items,
     notes,
-    source = 'twilio',
-    raw_transcript,
-    scheduled_for,
+    // on ignore pour l’instant :
+    // source,
+    // raw_transcript,
+    // scheduled_for,
   } = body;
 
   try {
