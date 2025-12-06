@@ -1,6 +1,7 @@
 // app/api/orders/status/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/supabaseAdmin';
+import { checkAdminAuth } from '@/lib/checkAdminAuth';
 
 type Body = {
   order_id?: string;
@@ -10,6 +11,11 @@ type Body = {
 const ALLOWED_STATUSES = ['new', 'in_progress', 'done', 'confirmed'];
 
 export async function POST(request: NextRequest) {
+  // Protection staff : nécessite le header Authorization: Bearer <ADMIN_API_KEY>
+  if (!checkAdminAuth(request.headers)) {
+    return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  }
+
   try {
     let body: Body;
     try {

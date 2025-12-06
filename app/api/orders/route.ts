@@ -1,9 +1,10 @@
 // app/api/orders/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 import { supabaseAdmin } from '@/lib/supabaseAdmin';
+import { checkAdminAuth } from '@/lib/checkAdminAuth';
 
 type CreateOrderItemInput = {
-  product_id: number;   // chez toi: 1, 2, 3...
+  product_id: number; // chez toi: 1, 2, 3...
   quantity: number;
   notes?: string | null;
 };
@@ -14,8 +15,8 @@ type CreateOrderBody = {
   items: CreateOrderItemInput[];
   notes?: string | null;
   source?: 'twilio' | 'web' | 'manual'; // pour info uniquement, pas stocké
-  raw_transcript?: string | null;       // pas encore stocké en base
-  scheduled_for?: string | null;        // pas encore stocké en base
+  raw_transcript?: string | null; // pas encore stocké en base
+  scheduled_for?: string | null; // pas encore stocké en base
 };
 
 // --- Validation simple du body ---
@@ -51,7 +52,7 @@ function validateBody(body: any): { ok: boolean; error?: string } {
 }
 
 // ------------------------------------------------------
-// POST /api/orders : créer une commande
+// POST /api/orders : créer une commande (public)
 // ------------------------------------------------------
 export async function POST(req: NextRequest) {
   let body: CreateOrderBody;
@@ -66,7 +67,7 @@ export async function POST(req: NextRequest) {
   if (!validation.ok) {
     return NextResponse.json(
       { error: 'validation_error', details: validation.error },
-      { status: 400 }
+      { status: 400 },
     );
   }
 
@@ -94,7 +95,7 @@ export async function POST(req: NextRequest) {
       console.error('clientSelectError:', clientSelectError);
       return NextResponse.json(
         { error: 'database_error', details: clientSelectError.message },
-        { status: 500 }
+        { status: 500 },
       );
     }
 
@@ -120,7 +121,7 @@ export async function POST(req: NextRequest) {
         console.error('clientInsertError:', clientInsertError);
         return NextResponse.json(
           { error: 'database_error', details: clientInsertError?.message },
-          { status: 500 }
+          { status: 500 },
         );
       }
 
@@ -141,7 +142,7 @@ export async function POST(req: NextRequest) {
       console.error('productsError:', productsError);
       return NextResponse.json(
         { error: 'database_error', details: productsError.message },
-        { status: 500 }
+        { status: 500 },
       );
     }
 
@@ -151,12 +152,12 @@ export async function POST(req: NextRequest) {
           error: 'invalid_product_id',
           details: 'One or more products do not exist',
         },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
     const productsById = new Map<number, any>(
-      products.map((p) => [p.id as number, p])
+      products.map((p) => [p.id as number, p]),
     );
 
     // 3) Calcul du total et préparation des lignes
@@ -189,14 +190,14 @@ export async function POST(req: NextRequest) {
         .insert({
           client_id: clientId,
           status: 'new',
-          delivery_mode: null,        // à gérer plus tard
-          delivery_address: null,     // à gérer plus tard
+          delivery_mode: null, // à gérer plus tard
+          delivery_address: null, // à gérer plus tard
           note: notes ?? null,
           total: totalAmount,
           total_price: totalAmount,
         })
         .select(
-          'id, client_id, status, delivery_mode, delivery_address, note, total, total_price, created_at'
+          'id, client_id, status, delivery_mode, delivery_address, note, total, total_price, created_at',
         )
         .single();
 
@@ -204,7 +205,7 @@ export async function POST(req: NextRequest) {
       console.error('orderInsertError:', orderInsertError);
       return NextResponse.json(
         { error: 'database_error', details: orderInsertError?.message },
-        { status: 500 }
+        { status: 500 },
       );
     }
 
@@ -220,7 +221,7 @@ export async function POST(req: NextRequest) {
             product_id: line.product_id,
             qty: line.quantity,
             unit_price: line.unit_price,
-          }))
+          })),
         )
         .select('id, order_id, product_id, qty, unit_price');
 
@@ -228,7 +229,7 @@ export async function POST(req: NextRequest) {
       console.error('itemsInsertError:', itemsInsertError);
       return NextResponse.json(
         { error: 'database_error', details: itemsInsertError.message },
-        { status: 500 }
+        { status: 500 },
       );
     }
 
@@ -245,7 +246,7 @@ export async function POST(req: NextRequest) {
           items: insertedItems ?? [],
         },
       },
-      { status: 201 }
+      { status: 201 },
     );
   } catch (err: any) {
     console.error('POST /api/orders exception:', err);
@@ -256,13 +257,13 @@ export async function POST(req: NextRequest) {
     ) {
       return NextResponse.json(
         { error: 'product_not_available', details: err.message },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
     return NextResponse.json(
       { error: 'unexpected_error' },
-      { status: 500 }
+      { status: 500 },
     );
   }
 }
@@ -271,6 +272,11 @@ export async function POST(req: NextRequest) {
 // GET /api/orders : liste des commandes pour dashboard
 // ------------------------------------------------------
 export async function GET(req: NextRequest) {
+  // Protection staff : nécessite le header Authorization: Bearer <ADMIN_API_KEY>
+  if (!checkAdminAuth(req.headers)) {
+    return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  }
+
   const { searchParams } = new URL(req.url);
 
   const status = searchParams.get('status') ?? undefined;
@@ -278,14 +284,17 @@ export async function GET(req: NextRequest) {
 
   const limit = Math.min(
     Number(searchParams.get('limit') ?? '50') || 50,
-    100
+    100,
   );
   const offset = Number(searchParams.get('offset') ?? '0') || 0;
 
   try {
     let query = supabaseAdmin
       .from('orders')
-      .select('id, client_id, status, delivery_mode, delivery_address, note, total, total_price, created_at', { count: 'exact' })
+      .select(
+        'id, client_id, status, delivery_mode, delivery_address, note, total, total_price, created_at',
+        { count: 'exact' },
+      )
       .order('created_at', { ascending: false })
       .range(offset, offset + limit - 1);
 
@@ -293,13 +302,15 @@ export async function GET(req: NextRequest) {
       query = query.eq('status', status);
     }
 
+    // (phoneNumber n’est pas encore utilisé, on peut l’ajouter plus tard si besoin)
+
     const { data, error, count } = await query;
 
     if (error) {
       console.error('GET /api/orders error:', error);
       return NextResponse.json(
         { error: 'database_error', details: error.message },
-        { status: 500 }
+        { status: 500 },
       );
     }
 
@@ -319,7 +330,7 @@ export async function GET(req: NextRequest) {
     console.error('GET /api/orders exception:', err);
     return NextResponse.json(
       { error: 'unexpected_error' },
-      { status: 500 }
+      { status: 500 },
     );
   }
 }
