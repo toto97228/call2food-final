@@ -50,3 +50,8 @@ voice-gateway/node_modules/
 .env
 .env.local
 voice-gateway/.env
+
+# REST Client tests
+test.http
+*.http
+*.rest

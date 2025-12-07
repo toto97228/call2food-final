@@ -1,5 +1,6 @@
 import { supabaseAdmin } from '@/lib/supabaseAdmin';
 import ThemeToggle from './ThemeToggle';
+import Link from 'next/link';
 
 type OrderRow = {
   id: string;
@@ -67,7 +68,9 @@ export default async function DashboardPage() {
     return (
       <main className="min-h-screen flex items-center justify-center bg-[#FFF3E2] text-slate-900 dark:bg-slate-950 dark:text-slate-100">
         <div className="text-center space-y-2">
-          <h1 className="text-2xl font-bold">Erreur de chargement des commandes</h1>
+          <h1 className="text-2xl font-bold">
+            Erreur de chargement des commandes
+          </h1>
           <p className="text-red-500 text-sm">{ordersError.message}</p>
         </div>
       </main>
@@ -107,7 +110,10 @@ export default async function DashboardPage() {
   const appelsRecus: string | null = null;
   const tauxConversion: string | null = null;
 
-  const lastOrderByClient = new Map<string, { client: ClientRow; lastDate: string }>();
+  const lastOrderByClient = new Map<
+    string,
+    { client: ClientRow; lastDate: string }
+  >();
 
   for (const order of orders) {
     if (!order.client_id) continue;
@@ -148,20 +154,26 @@ export default async function DashboardPage() {
               <div className="text-xs text-orange-700/80 dark:text-slate-400">
                 Vue en temps réel des commandes
               </div>
-              {/* Petite navigation Dashboard / Cuisine */}
-              <nav className="mt-2 flex gap-2 text-[11px]">
-                <a
+              {/* Navigation Dashboard / Cuisine / Salle */}
+              <nav className="mt-2 flex flex-wrap gap-2 text-[11px]">
+                <Link
                   href="/dashboard"
                   className="rounded-full bg-white/80 px-3 py-1 font-medium text-orange-800 shadow-sm border border-orange-100 dark:bg-slate-800 dark:border-slate-700 dark:text-slate-100"
                 >
                   Dashboard
-                </a>
-                <a
+                </Link>
+                <Link
                   href="/kitchen"
                   className="rounded-full bg-transparent px-3 py-1 font-medium text-orange-800/70 border border-transparent hover:border-orange-200 dark:text-slate-300 dark:hover:border-slate-700"
                 >
                   Vue cuisine
-                </a>
+                </Link>
+                <Link
+                  href={`/room?admin_key=${process.env.NEXT_PUBLIC_ADMIN_KEY_PLACEHOLDER ?? ''}`}
+                  className="rounded-full bg-transparent px-3 py-1 font-medium text-orange-800/70 border border-transparent hover:border-orange-200 dark:text-slate-300 dark:hover:border-slate-700"
+                >
+                  Vue salle (réservations)
+                </Link>
               </nav>
             </div>
           </div>
@@ -210,7 +222,8 @@ export default async function DashboardPage() {
               {appelsRecus !== null ? appelsRecus : '—'}
             </div>
             <p className="mt-1 text-[11px] text-orange-700/70 dark:text-slate-400">
-              Non disponible pour l’instant (stat issu de Twilio à brancher plus tard).
+              Non disponible pour l’instant (stat issu de Twilio à brancher plus
+              tard).
             </p>
           </div>
 
@@ -222,7 +235,8 @@ export default async function DashboardPage() {
               {tauxConversion !== null ? `${tauxConversion} %` : '—'}
             </div>
             <p className="mt-1 text-[11px] text-orange-700/70 dark:text-slate-400">
-              Nécessite les visites du site / appels total → à calculer plus tard.
+              Nécessite les visites du site / appels total → à calculer plus
+              tard.
             </p>
           </div>
         </section>

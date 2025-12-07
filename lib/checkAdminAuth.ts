@@ -1,10 +1,11 @@
 // lib/checkAdminAuth.ts
 
-// Auth très simple : on compare un header custom x-admin-key
-// avec la variable d'environnement ADMIN_API_KEY.
-// On "trim" les deux valeurs pour ignorer les espaces / retours à la ligne.
+// Auth staff simple :
+// - soit via query string ?admin_key=XXX
+// - soit via header x-admin-key: XXX
+// Les valeurs sont "trim" pour éviter les problèmes d'espaces / retours à la ligne.
 
-export function checkAdminAuth(headers: Headers): boolean {
+export function checkAdminAuth(headers: Headers, url?: string): boolean {
   const rawToken = process.env.ADMIN_API_KEY;
 
   if (!rawToken) {
@@ -12,23 +13,40 @@ export function checkAdminAuth(headers: Headers): boolean {
     return false;
   }
 
-  const token = rawToken.trim(); // on enlève espaces / \n éventuels
-  const rawHeader = headers.get('x-admin-key');
+  const token = rawToken.trim();
 
-  if (!rawHeader) {
-    console.warn('[checkAdminAuth] Missing x-admin-key header');
+  let candidate: string | null = null;
+
+  // 1) Essayer d'abord de lire ?admin_key=... dans l'URL
+  if (url) {
+    try {
+      const u = new URL(url);
+      const qsKey = u.searchParams.get('admin_key');
+      if (qsKey && qsKey.trim().length > 0) {
+        candidate = qsKey.trim();
+      }
+    } catch (e) {
+      console.warn('[checkAdminAuth] Invalid URL passed to checkAdminAuth');
+    }
+  }
+
+  // 2) Sinon, regarder le header x-admin-key
+  if (!candidate) {
+    const rawHeader = headers.get('x-admin-key');
+    if (rawHeader && rawHeader.trim().length > 0) {
+      candidate = rawHeader.trim();
+    }
+  }
+
+  if (!candidate) {
+    console.warn('[checkAdminAuth] No admin key provided (header or query)');
     return false;
   }
 
-  const headerKey = rawHeader.trim(); // idem côté requête
-
-  const ok = headerKey === token;
+  const ok = candidate === token;
 
   if (!ok) {
-    console.warn('[checkAdminAuth] x-admin-key mismatch', {
-      tokenLen: token.length,
-      headerLen: headerKey.length,
-    });
+    console.warn('[checkAdminAuth] admin key mismatch');
   }
 
   return ok;
