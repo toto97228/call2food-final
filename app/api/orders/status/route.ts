@@ -53,12 +53,13 @@ export async function POST(request: NextRequest) {
       .eq('id', order_id);
 
     if (error) {
-      console.error('[POST /api/orders/status] Supabase error:', error);
-      return NextResponse.json(
-        { error: 'Erreur Supabase lors de la mise à jour du statut.' },
-        { status: 500 },
-      );
-    }
+  console.error('[POST /api/orders/status] Supabase error:', error);
+  return NextResponse.json(
+    { error: 'supabase_error', details: error },
+    { status: 500 },
+  );
+}
+
 
     return NextResponse.json({ ok: true }, { status: 200 });
   } catch (err) {
