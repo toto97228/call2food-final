@@ -1,6 +1,8 @@
+// app/room/page.tsx
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
+import { Suspense } from "react";
 import ThemeToggle from "@/app/dashboard/ThemeToggle";
 import ReservationsBoard from "./ReservationsBoard";
 
@@ -28,7 +30,15 @@ export default function RoomPage() {
       </header>
 
       <div className="mx-auto max-w-6xl px-4 py-6">
-        <ReservationsBoard />
+        <Suspense
+          fallback={
+            <div className="rounded-2xl bg-white shadow-sm border border-orange-100 p-4 text-xs text-orange-800/80 dark:bg-slate-900 dark:border-slate-800 dark:text-slate-300">
+              Chargement des réservations…
+            </div>
+          }
+        >
+          <ReservationsBoard />
+        </Suspense>
       </div>
     </main>
   );

@@ -1,3 +1,4 @@
+// app/room/ReservationsBoard.tsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -42,6 +43,7 @@ function formatTime(iso: string | null) {
 
 export default function ReservationsBoard() {
   const searchParams = useSearchParams();
+
   const [adminKey, setAdminKey] = useState<string | null>(null);
   const [reservations, setReservations] = useState<Reservation[]>([]);
   const [loading, setLoading] = useState(false);
@@ -52,10 +54,18 @@ export default function ReservationsBoard() {
     const keyFromUrl = searchParams.get("admin_key");
     if (keyFromUrl) {
       setAdminKey(keyFromUrl);
-      localStorage.setItem("c2e_admin_key", keyFromUrl);
+      try {
+        localStorage.setItem("c2e_admin_key", keyFromUrl);
+      } catch {
+        // ignore
+      }
     } else {
-      const stored = localStorage.getItem("c2e_admin_key");
-      if (stored) setAdminKey(stored);
+      try {
+        const stored = localStorage.getItem("c2e_admin_key");
+        if (stored) setAdminKey(stored);
+      } catch {
+        // ignore
+      }
     }
   }, [searchParams]);
 
@@ -102,7 +112,7 @@ export default function ReservationsBoard() {
     }
   }
 
-  // première charge + rafraîchissement toutes les 15s
+  // Première charge + rafraîchissement toutes les 15s
   useEffect(() => {
     if (!adminKey) return;
     fetchReservations();
@@ -114,24 +124,29 @@ export default function ReservationsBoard() {
   async function updateStatus(id: string, status: ReservationStatus) {
     if (!adminKey) return;
     try {
-      const res = await fetch("/api/reservations/status?admin_key=" + encodeURIComponent(adminKey), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ reservation_id: id, status }),
-      });
+      const res = await fetch(
+        "/api/reservations/status?admin_key=" + encodeURIComponent(adminKey),
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ reservation_id: id, status }),
+        }
+      );
 
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error || `HTTP ${res.status}`);
       }
 
-      // mise à jour locale optimiste
       setReservations((prev) =>
         prev.map((r) => (r.id === id ? { ...r, status } : r))
       );
     } catch (err: any) {
       console.error("updateStatus error:", err);
-      alert("Erreur lors de la mise à jour du statut : " + (err?.message || ""));
+      alert(
+        "Erreur lors de la mise à jour du statut : " +
+          (err?.message || "inconnue")
+      );
     }
   }
 
@@ -142,7 +157,8 @@ export default function ReservationsBoard() {
           Accès protégé
         </h2>
         <p className="text-xs text-orange-800/80 dark:text-slate-300">
-          Ajoutez <code>?admin_key=VOTRE_CLE</code> à l’URL pour voir les réservations.
+          Ajoutez <code>?admin_key=VOTRE_CLE</code> à l’URL pour voir les
+          réservations.
         </p>
       </div>
     );
@@ -156,7 +172,7 @@ export default function ReservationsBoard() {
             Réservations de la salle
           </h1>
           <p className="text-xs text-orange-800/80 dark:text-slate-400">
-            Vue temps réel des tables à gérer
+            Vue temps réel des tables
           </p>
         </div>
         <button
@@ -213,7 +229,8 @@ export default function ReservationsBoard() {
                         {r.client_name || "Sans nom"}
                       </div>
                       <div className="text-[11px] text-orange-700/80 dark:text-slate-400">
-                        {r.phone || "—"} · {r.party_size || "?"} pers · {formatTime(r.reservation_time)}
+                        {r.phone || "—"} · {r.party_size || "?"} pers ·{" "}
+                        {formatTime(r.reservation_time)}
                       </div>
                     </div>
                   </div>
