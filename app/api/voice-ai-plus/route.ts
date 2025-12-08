@@ -17,14 +17,34 @@ function xmlResponse(twiml: twilio.twiml.VoiceResponse) {
 }
 
 /**
- * Téléchargement de l'enregistrement Twilio
- * On renvoie un ArrayBuffer (plus simple avec File/FormData).
+ * Téléchargement de l'enregistrement Twilio (avec auth)
  */
 async function downloadRecording(url: string): Promise<ArrayBuffer> {
-  const res = await fetch(url);
-  if (!res.ok) {
-    throw new Error(`Impossible de télécharger l'audio Twilio: ${res.status}`);
+  const accountSid = process.env.TWILIO_ACCOUNT_SID;
+  const authToken = process.env.TWILIO_AUTH_TOKEN;
+
+  if (!accountSid || !authToken) {
+    throw new Error("TWILIO_ACCOUNT_SID ou TWILIO_AUTH_TOKEN manquant.");
   }
+
+  // URL complète en mp3
+  const fullUrl = url.endsWith(".mp3") ? url : `${url}.mp3`;
+
+  const basicAuth = Buffer.from(`${accountSid}:${authToken}`).toString("base64");
+
+  const res = await fetch(fullUrl, {
+    headers: {
+      Authorization: `Basic ${basicAuth}`,
+    },
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(
+      `Impossible de télécharger l'audio Twilio: ${res.status} ${res.statusText} ${text}`,
+    );
+  }
+
   return await res.arrayBuffer();
 }
 
@@ -49,13 +69,16 @@ async function transcribeAudio(audioData: ArrayBuffer): Promise<string> {
     });
     form.append("file", file);
 
-    const resp = await fetch("https://api.openai.com/v1/audio/transcriptions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
+    const resp = await fetch(
+      "https://api.openai.com/v1/audio/transcriptions",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: form,
       },
-      body: form,
-    });
+    );
 
     const data = await resp.json();
     if (!resp.ok) {
@@ -87,7 +110,7 @@ export async function POST(req: NextRequest) {
         voice: "alice",
         language: "fr-FR",
       },
-      "Bonjour, après le bip, dites votre commande, puis appuyez sur dièse pour terminer."
+      "Bonjour, après le bip, dites votre commande, puis appuyez sur dièse pour terminer.",
     );
 
     twiml.record({
@@ -104,6 +127,9 @@ export async function POST(req: NextRequest) {
   // 2) DEUXIÈME PASSAGE : Twilio a un RecordingUrl → on traite avec l’IA
   try {
     // a) Télécharger l'audio
+    if (DEBUG) {
+      console.log("📥 Downloading recording from", recordingUrl);
+    }
     const audioData = await downloadRecording(recordingUrl);
 
     // b) Transcrire via OpenAI
@@ -118,7 +144,7 @@ export async function POST(req: NextRequest) {
     if (!transcript.trim()) {
       twiml.say(
         { voice: "alice", language: "fr-FR" },
-        "Désolé, je n'ai pas compris votre message. Merci de réessayer."
+        "Désolé, je n'ai pas compris votre message. Merci de réessayer.",
       );
       twiml.hangup();
       return xmlResponse(twiml);
@@ -127,11 +153,11 @@ export async function POST(req: NextRequest) {
     // Pour l’instant, on se contente de répéter ce que le client a dit
     twiml.say(
       { voice: "alice", language: "fr-FR" },
-      `Vous avez dit : ${transcript}`
+      `Vous avez dit : ${transcript}`,
     );
     twiml.say(
       { voice: "alice", language: "fr-FR" },
-      "Le mode IA plus est en test. La création automatique de commande sera activée prochainement."
+      "Le mode IA plus est en test. La création automatique de commande sera activée prochainement.",
     );
     twiml.hangup();
 
@@ -142,7 +168,7 @@ export async function POST(req: NextRequest) {
     const twiml = new VoiceResponse();
     twiml.say(
       { voice: "alice", language: "fr-FR" },
-      "Une erreur est survenue lors du traitement de votre appel."
+      "Une erreur est survenue lors du traitement de votre appel.",
     );
     twiml.hangup();
 
