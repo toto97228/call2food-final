@@ -1,8 +1,8 @@
-// app/room/page.tsx
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
 import ThemeToggle from "@/app/dashboard/ThemeToggle";
 import ReservationsBoard from "./ReservationsBoard";
-
-export const dynamic = "force-dynamic";
 
 export default function RoomPage() {
   return (
@@ -18,14 +18,12 @@ export default function RoomPage() {
                 Call2Eat – Vue salle
               </div>
               <div className="text-xs text-orange-700/80 dark:text-slate-400">
-                Gestion des réservations de table
+                Gestion des réservations
               </div>
             </div>
           </div>
 
-          <div className="flex items-center justify-between sm:justify-end gap-3">
-            <ThemeToggle />
-          </div>
+          <ThemeToggle />
         </div>
       </header>
 
