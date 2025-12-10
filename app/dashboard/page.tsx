@@ -156,25 +156,35 @@ export default async function DashboardPage() {
               </div>
               {/* Navigation Dashboard / Cuisine / Salle */}
               <nav className="mt-2 flex flex-wrap gap-2 text-[11px]">
-                <Link
-                  href="/dashboard"
-                  className="rounded-full bg-white/80 px-3 py-1 font-medium text-orange-800 shadow-sm border border-orange-100 dark:bg-slate-800 dark:border-slate-700 dark:text-slate-100"
-                >
-                  Dashboard
-                </Link>
-                <Link
-                  href="/kitchen"
-                  className="rounded-full bg-transparent px-3 py-1 font-medium text-orange-800/70 border border-transparent hover:border-orange-200 dark:text-slate-300 dark:hover:border-slate-700"
-                >
-                  Vue cuisine
-                </Link>
-                <Link
-                  href={`/room?admin_key=${process.env.NEXT_PUBLIC_ADMIN_KEY_PLACEHOLDER ?? ''}`}
-                  className="rounded-full bg-transparent px-3 py-1 font-medium text-orange-800/70 border border-transparent hover:border-orange-200 dark:text-slate-300 dark:hover:border-slate-700"
-                >
-                  Vue salle (réservations)
-                </Link>
-              </nav>
+  <Link
+    href="/dashboard"
+    className="rounded-full bg-white/80 px-3 py-1 font-medium text-orange-800 shadow-sm border border-orange-100 dark:bg-slate-800 dark:border-slate-700 dark:text-slate-100"
+  >
+    Dashboard
+  </Link>
+
+  <Link
+    href="/kitchen"
+    className="rounded-full bg-transparent px-3 py-1 font-medium text-orange-800/70 border border-transparent hover:border-orange-200 dark:text-slate-300 dark:hover:border-slate-700"
+  >
+    Vue cuisine
+  </Link>
+
+  <Link
+    href="/dashboard/menu"
+    className="rounded-full bg-transparent px-3 py-1 font-medium text-orange-800/70 border border-transparent hover:border-orange-200 dark:text-slate-300 dark:hover:border-slate-700"
+  >
+    Carte / Menu
+  </Link>
+
+  <Link
+    href={`/room?admin_key=${process.env.NEXT_PUBLIC_ADMIN_KEY_PLACEHOLDER ?? ''}`}
+    className="rounded-full bg-transparent px-3 py-1 font-medium text-orange-800/70 border border-transparent hover:border-orange-200 dark:text-slate-300 dark:hover:border-slate-700"
+  >
+    Vue salle (réservations)
+  </Link>
+</nav>
+
             </div>
           </div>
 
