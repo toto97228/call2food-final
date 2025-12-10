@@ -29,7 +29,9 @@ export default function MenuDashboardPage() {
     try {
       const res = await fetch("/api/products");
       const data = await res.json();
-      setProducts(data.products ?? []);
+      setProducts((data && data.products) ?? []);
+    } catch (err) {
+      console.error("Erreur chargement produits:", err);
     } finally {
       setLoading(false);
     }
@@ -53,6 +55,8 @@ export default function MenuDashboardPage() {
       });
 
       if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        console.error("PATCH /api/products error:", data);
         alert("Erreur lors de la sauvegarde du produit.");
         return;
       }
@@ -60,54 +64,59 @@ export default function MenuDashboardPage() {
       setProducts((prev) =>
         prev.map((p) => (p.id === id ? { ...p, ...update } : p))
       );
+    } catch (err) {
+      console.error("updateProduct exception:", err);
+      alert("Erreur lors de la sauvegarde du produit.");
     } finally {
       setSaving(null);
     }
   }
 
   // Créer un nouveau produit
-  async function createProduct() {
-    if (!newName.trim()) {
-      alert("Nom du produit requis.");
-      return;
-    }
-    const priceNumber = parseFloat(newPrice.replace(",", "."));
-    if (!priceNumber || priceNumber <= 0) {
-      alert("Prix invalide.");
+  async function handleCreateProduct() {
+    const name = newName.trim();
+    const priceStr = newPrice.trim();
+    const stockNote = newNote.trim() || null;
+
+    // convertir "11,9" → 11.9
+    const normalized = priceStr.replace(",", ".");
+    const priceNumber = Number(normalized);
+
+    if (!name || Number.isNaN(priceNumber)) {
+      alert("Nom ou prix invalide.");
       return;
     }
 
     setCreating(true);
     try {
-      const res = await fetch("/api/products", {
+      const resp = await fetch("/api/products", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           "x-admin-key": adminKey,
         },
         body: JSON.stringify({
-          name: newName.trim(),
-          base_price: priceNumber,
-          available: true,
-          stock_note: newNote.trim() || null,
+          name,
+          base_price: priceNumber, // IMPORTANT: colonne en base
+          stock_note: stockNote,
         }),
       });
 
-      const data = await res.json();
-
-      if (!res.ok) {
+      if (!resp.ok) {
+        const data = await resp.json().catch(() => null);
         console.error("Create product error:", data);
         alert("Erreur lors de la création du produit.");
         return;
       }
 
-      const created: Product = data.product;
-      setProducts((prev) => [created, ...prev]);
-
-      // reset formulaire
+      // reset formulaire + rechargement liste
       setNewName("");
       setNewPrice("");
       setNewNote("");
+      await loadProducts();
+    } catch (err) {
+      console.error("handleCreateProduct exception:", err);
+      alert("Erreur lors de la création du produit.");
     } finally {
       setCreating(false);
     }
@@ -170,7 +179,7 @@ export default function MenuDashboardPage() {
 
           <button
             type="button"
-            onClick={createProduct}
+            onClick={handleCreateProduct}
             disabled={creating}
             className="mt-2 inline-flex items-center justify-center rounded-full bg-orange-500 px-4 py-2 text-xs font-semibold text-white shadow hover:bg-orange-600 disabled:opacity-60"
           >
@@ -182,9 +191,7 @@ export default function MenuDashboardPage() {
         <section className="space-y-4">
           {loading && <p>Chargement…</p>}
 
-          {!loading && products.length === 0 && (
-            <p>Aucun produit trouvé.</p>
-          )}
+          {!loading && products.length === 0 && <p>Aucun produit trouvé.</p>}
 
           {!loading &&
             products.length > 0 &&
