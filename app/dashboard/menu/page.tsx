@@ -1,8 +1,7 @@
-// app/dashboard/menu/page.tsx
-"use client";
+'use client';
 
-import { useEffect, useState } from "react";
-import ThemeToggle from "../ThemeToggle";
+import { useEffect, useState } from 'react';
+import ThemeToggle from '../ThemeToggle';
 
 type Product = {
   id: number;
@@ -12,28 +11,30 @@ type Product = {
   stock_note?: string | null;
 };
 
+const ADMIN_HEADER_NAME = 'x-admin-key';
+
 export default function MenuDashboardPage() {
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState<number | null>(null);
 
-  const [newName, setNewName] = useState("");
-  const [newPrice, setNewPrice] = useState<string>("");
-  const [newStockNote, setNewStockNote] = useState("");
+  const [newName, setNewName] = useState('');
+  const [newPrice, setNewPrice] = useState('');
+  const [newStockNote, setNewStockNote] = useState('');
   const [creating, setCreating] = useState(false);
 
-  // clé admin (NEXT_PUBLIC_ADMIN_KEY_PLACEHOLDER doit être définie sur Vercel)
-  const adminKey = process.env.NEXT_PUBLIC_ADMIN_KEY_PLACEHOLDER ?? "";
+  // ATTENTION : cette valeur vient de l'env "publique"
+  const adminKey = process.env.NEXT_PUBLIC_ADMIN_KEY_PLACEHOLDER ?? '';
 
-  // --- Chargement produits ---
+  // ====== Chargement des produits ======
   async function loadProducts() {
     setLoading(true);
     try {
-      const res = await fetch("/api/products");
+      const res = await fetch('/api/products');
       const data = await res.json();
       setProducts(data.products ?? []);
     } catch (err) {
-      console.error("loadProducts error:", err);
+      console.error('Error loading products:', err);
     } finally {
       setLoading(false);
     }
@@ -43,23 +44,23 @@ export default function MenuDashboardPage() {
     loadProducts();
   }, []);
 
-  // --- Mise à jour d’un produit existant ---
+  // ====== Mise à jour d'un produit existant ======
   async function updateProduct(id: number, update: Partial<Product>) {
     setSaving(id);
     try {
       const res = await fetch(`/api/products/${id}`, {
-        method: "PATCH",
+        method: 'PATCH',
         headers: {
-          "Content-Type": "application/json",
-          "x-admin-key": adminKey,
+          'Content-Type': 'application/json',
+          [ADMIN_HEADER_NAME]: adminKey,
         },
         body: JSON.stringify(update),
       });
 
       if (!res.ok) {
         const data = await res.json().catch(() => null);
-        console.error("Update product error:", res.status, data);
-        alert("Erreur lors de la sauvegarde du produit.");
+        console.error('Update product error:', data);
+        alert('Erreur lors de la sauvegarde du produit.');
         return;
       }
 
@@ -67,64 +68,57 @@ export default function MenuDashboardPage() {
         prev.map((p) => (p.id === id ? { ...p, ...update } : p)),
       );
     } catch (err) {
-      console.error("updateProduct exception:", err);
-      alert("Erreur réseau lors de la sauvegarde du produit.");
+      console.error('Update product exception:', err);
+      alert('Erreur réseau lors de la sauvegarde du produit.');
     } finally {
       setSaving(null);
     }
   }
 
-  // --- Création d’un nouveau produit ---
+  // ====== Création d'un nouveau produit ======
   async function createProduct() {
     const name = newName.trim();
-    const priceStr = newPrice.trim().replace(",", "."); // "11,9" → "11.9"
-    const priceNumber = Number(priceStr);
+    const priceStr = newPrice.trim();
     const stockNote = newStockNote.trim() || null;
 
+    const normalized = priceStr.replace(',', '.');
+    const priceNumber = Number(normalized);
+
     if (!name || Number.isNaN(priceNumber)) {
-      alert("Nom ou prix invalide.");
+      alert('Nom ou prix invalide.');
       return;
     }
 
     setCreating(true);
     try {
-      const resp = await fetch("/api/products", {
-        method: "POST",
+      const resp = await fetch('/api/products', {
+        method: 'POST',
         headers: {
-          "Content-Type": "application/json",
-          "x-admin-key": adminKey,
+          'Content-Type': 'application/json',
+          [ADMIN_HEADER_NAME]: adminKey,
         },
         body: JSON.stringify({
           name,
-          base_price: priceNumber, // colonne Supabase
-          price: priceNumber,      // au cas où l’API lise `price`
+          base_price: priceNumber,
+          price: priceNumber,
           stock_note: stockNote,
         }),
       });
 
-      const data = await resp.json().catch(() => null);
-
       if (!resp.ok) {
-        console.error("Create product error:", resp.status, data);
-        alert("Erreur lors de la création du produit.");
+        const data = await resp.json().catch(() => null);
+        console.error('Create product error:', data);
+        alert('Erreur lors de la création du produit.');
         return;
       }
 
-      // Si l’API renvoie le produit créé : on l’ajoute à la liste
-      if (data?.product) {
-        setProducts((prev) => [...prev, data.product]);
-      } else {
-        // sinon on recharge la liste au cas où
-        await loadProducts();
-      }
-
-      // reset formulaire
-      setNewName("");
-      setNewPrice("");
-      setNewStockNote("");
+      setNewName('');
+      setNewPrice('');
+      setNewStockNote('');
+      await loadProducts();
     } catch (err) {
-      console.error("createProduct exception:", err);
-      alert("Erreur réseau lors de la création du produit.");
+      console.error('Create product exception:', err);
+      alert('Erreur réseau lors de la création du produit.');
     } finally {
       setCreating(false);
     }
@@ -165,11 +159,12 @@ export default function MenuDashboardPage() {
             <div>
               <label className="text-xs block mb-1">Prix (€)</label>
               <input
-                type="text"
+                type="number"
+                step="0.1"
                 value={newPrice}
                 onChange={(e) => setNewPrice(e.target.value)}
                 className="w-full px-2 py-1 rounded-lg border border-orange-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-sm"
-                placeholder="Ex : 12,5"
+                placeholder="Ex : 12.5"
               />
             </div>
             <div>
@@ -190,11 +185,11 @@ export default function MenuDashboardPage() {
             disabled={creating}
             className="mt-2 inline-flex items-center justify-center rounded-full bg-orange-500 px-4 py-2 text-xs font-semibold text-white shadow hover:bg-orange-600 disabled:opacity-60"
           >
-            {creating ? "Création..." : "Ajouter le produit"}
+            {creating ? 'Création...' : 'Ajouter le produit'}
           </button>
         </section>
 
-        {/* Liste des produits existants */}
+        {/* Liste des produits */}
         <section className="space-y-4">
           {loading && <p>Chargement…</p>}
 
@@ -207,7 +202,6 @@ export default function MenuDashboardPage() {
                 key={product.id}
                 className="rounded-xl bg-white dark:bg-slate-900 border border-orange-200 dark:border-slate-800 p-4 shadow-sm"
               >
-                {/* Nom + switch dispo */}
                 <div className="flex items-center justify-between">
                   <div>
                     <div className="text-sm font-semibold">{product.name}</div>
@@ -218,7 +212,7 @@ export default function MenuDashboardPage() {
 
                   <label className="flex items-center gap-2 cursor-pointer">
                     <span className="text-xs">
-                      {product.available ? "Disponible" : "Indisponible"}
+                      {product.available ? 'Disponible' : 'Indisponible'}
                     </span>
                     <input
                       type="checkbox"
@@ -233,7 +227,6 @@ export default function MenuDashboardPage() {
                   </label>
                 </div>
 
-                {/* Prix */}
                 <div className="mt-3">
                   <label className="text-xs block mb-1">Prix (€)</label>
                   <input
@@ -249,11 +242,10 @@ export default function MenuDashboardPage() {
                   />
                 </div>
 
-                {/* Note stock */}
                 <div className="mt-3">
                   <label className="text-xs block mb-1">Note de stock</label>
                   <textarea
-                    defaultValue={product.stock_note ?? ""}
+                    defaultValue={product.stock_note ?? ''}
                     placeholder="Ex : rupture mozzarella, plus de coca zéro…"
                     onBlur={(e) =>
                       updateProduct(product.id, {
