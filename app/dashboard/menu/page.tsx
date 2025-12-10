@@ -1,3 +1,4 @@
+// app/dashboard/menu/page.tsx
 "use client";
 
 import { useEffect, useState } from "react";
@@ -18,20 +19,21 @@ export default function MenuDashboardPage() {
 
   const [newName, setNewName] = useState("");
   const [newPrice, setNewPrice] = useState<string>("");
-  const [newNote, setNewNote] = useState("");
+  const [newStockNote, setNewStockNote] = useState("");
   const [creating, setCreating] = useState(false);
 
+  // clé admin (NEXT_PUBLIC_ADMIN_KEY_PLACEHOLDER doit être définie sur Vercel)
   const adminKey = process.env.NEXT_PUBLIC_ADMIN_KEY_PLACEHOLDER ?? "";
 
-  // Charger les produits
+  // --- Chargement produits ---
   async function loadProducts() {
     setLoading(true);
     try {
       const res = await fetch("/api/products");
       const data = await res.json();
-      setProducts((data && data.products) ?? []);
+      setProducts(data.products ?? []);
     } catch (err) {
-      console.error("Erreur chargement produits:", err);
+      console.error("loadProducts error:", err);
     } finally {
       setLoading(false);
     }
@@ -41,7 +43,7 @@ export default function MenuDashboardPage() {
     loadProducts();
   }, []);
 
-  // Sauvegarder une modification d'un produit existant
+  // --- Mise à jour d’un produit existant ---
   async function updateProduct(id: number, update: Partial<Product>) {
     setSaving(id);
     try {
@@ -56,31 +58,28 @@ export default function MenuDashboardPage() {
 
       if (!res.ok) {
         const data = await res.json().catch(() => null);
-        console.error("PATCH /api/products error:", data);
+        console.error("Update product error:", res.status, data);
         alert("Erreur lors de la sauvegarde du produit.");
         return;
       }
 
       setProducts((prev) =>
-        prev.map((p) => (p.id === id ? { ...p, ...update } : p))
+        prev.map((p) => (p.id === id ? { ...p, ...update } : p)),
       );
     } catch (err) {
       console.error("updateProduct exception:", err);
-      alert("Erreur lors de la sauvegarde du produit.");
+      alert("Erreur réseau lors de la sauvegarde du produit.");
     } finally {
       setSaving(null);
     }
   }
 
-  // Créer un nouveau produit
-  async function handleCreateProduct() {
+  // --- Création d’un nouveau produit ---
+  async function createProduct() {
     const name = newName.trim();
-    const priceStr = newPrice.trim();
-    const stockNote = newNote.trim() || null;
-
-    // convertir "11,9" → 11.9
-    const normalized = priceStr.replace(",", ".");
-    const priceNumber = Number(normalized);
+    const priceStr = newPrice.trim().replace(",", "."); // "11,9" → "11.9"
+    const priceNumber = Number(priceStr);
+    const stockNote = newStockNote.trim() || null;
 
     if (!name || Number.isNaN(priceNumber)) {
       alert("Nom ou prix invalide.");
@@ -97,26 +96,35 @@ export default function MenuDashboardPage() {
         },
         body: JSON.stringify({
           name,
-          base_price: priceNumber, // IMPORTANT: colonne en base
+          base_price: priceNumber, // colonne Supabase
+          price: priceNumber,      // au cas où l’API lise `price`
           stock_note: stockNote,
         }),
       });
 
+      const data = await resp.json().catch(() => null);
+
       if (!resp.ok) {
-        const data = await resp.json().catch(() => null);
-        console.error("Create product error:", data);
+        console.error("Create product error:", resp.status, data);
         alert("Erreur lors de la création du produit.");
         return;
       }
 
-      // reset formulaire + rechargement liste
+      // Si l’API renvoie le produit créé : on l’ajoute à la liste
+      if (data?.product) {
+        setProducts((prev) => [...prev, data.product]);
+      } else {
+        // sinon on recharge la liste au cas où
+        await loadProducts();
+      }
+
+      // reset formulaire
       setNewName("");
       setNewPrice("");
-      setNewNote("");
-      await loadProducts();
+      setNewStockNote("");
     } catch (err) {
-      console.error("handleCreateProduct exception:", err);
-      alert("Erreur lors de la création du produit.");
+      console.error("createProduct exception:", err);
+      alert("Erreur réseau lors de la création du produit.");
     } finally {
       setCreating(false);
     }
@@ -157,20 +165,19 @@ export default function MenuDashboardPage() {
             <div>
               <label className="text-xs block mb-1">Prix (€)</label>
               <input
-                type="number"
-                step="0.1"
+                type="text"
                 value={newPrice}
                 onChange={(e) => setNewPrice(e.target.value)}
                 className="w-full px-2 py-1 rounded-lg border border-orange-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-sm"
-                placeholder="Ex : 12.5"
+                placeholder="Ex : 12,5"
               />
             </div>
             <div>
               <label className="text-xs block mb-1">Note stock (optionnel)</label>
               <input
                 type="text"
-                value={newNote}
-                onChange={(e) => setNewNote(e.target.value)}
+                value={newStockNote}
+                onChange={(e) => setNewStockNote(e.target.value)}
                 className="w-full px-2 py-1 rounded-lg border border-orange-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-sm"
                 placeholder="Rupture saumon, etc."
               />
@@ -179,7 +186,7 @@ export default function MenuDashboardPage() {
 
           <button
             type="button"
-            onClick={handleCreateProduct}
+            onClick={createProduct}
             disabled={creating}
             className="mt-2 inline-flex items-center justify-center rounded-full bg-orange-500 px-4 py-2 text-xs font-semibold text-white shadow hover:bg-orange-600 disabled:opacity-60"
           >
@@ -209,7 +216,6 @@ export default function MenuDashboardPage() {
                     </div>
                   </div>
 
-                  {/* Dispo switch */}
                   <label className="flex items-center gap-2 cursor-pointer">
                     <span className="text-xs">
                       {product.available ? "Disponible" : "Indisponible"}
