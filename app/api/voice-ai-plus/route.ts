@@ -1,13 +1,21 @@
-/// app/api/voice-ai-plus/route.ts
+// app/api/voice-ai-plus/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import twilio from "twilio";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
-import { extractFromSpeech } from "@/lib/extractFromSpeech";
 
 export const runtime = "nodejs"; // important pour utiliser le SDK Twilio
 
 const DEBUG = true;
 const VoiceResponse = twilio.twiml.VoiceResponse;
+
+/* --------------------------------------------- */
+/* Types internes                                */
+/* --------------------------------------------- */
+
+type ParsedItem = {
+  productName: string;
+  quantity: number;
+};
 
 /* --------------------------------------------- */
 /* Helper TwiML                                   */
@@ -17,6 +25,98 @@ function xmlResponse(twiml: twilio.twiml.VoiceResponse) {
     status: 200,
     headers: { "Content-Type": "text/xml" },
   });
+}
+
+/* --------------------------------------------- */
+/* Normalisation + parsing naïf en français       */
+/* --------------------------------------------- */
+
+const NUMBER_WORDS: Record<string, number> = {
+  un: 1,
+  une: 1,
+  "un.": 1,
+  "une.": 1,
+  deux: 2,
+  trois: 3,
+  quatre: 4,
+  cinq: 5,
+};
+
+const PRODUCT_KEYWORDS: { key: string; label: string }[] = [
+  { key: "margarita", label: "Margarita" },
+  { key: "margherita", label: "Margarita" },
+  { key: "reine", label: "Reine" },
+  { key: "4 fromages", label: "4 fromages" },
+  { key: "quatre fromages", label: "4 fromages" },
+];
+
+function normalizeForParsing(text: string): string {
+  return text
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "") // enlève les accents
+    .replace(/[^a-z0-9\s]/g, " ") // garde lettres, chiffres, espaces
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * Exemple géré :
+ * "je voudrais deux reines et une 4 fromages"
+ * => [
+ *   { productName: "Reine", quantity: 2 },
+ *   { productName: "4 fromages", quantity: 1 }
+ * ]
+ */
+function parseFrenchOrder(text: string): ParsedItem[] {
+  const normalized = normalizeForParsing(text);
+  if (!normalized) return [];
+
+  const items: ParsedItem[] = [];
+
+  for (const { key, label } of PRODUCT_KEYWORDS) {
+    const keyNorm = normalizeForParsing(key);
+    const idx = normalized.indexOf(keyNorm);
+    if (idx === -1) continue;
+
+    // On regarde 3 mots avant le mot-clé pour trouver la quantité
+    const before = normalized.slice(0, idx).trim();
+    const beforeTokens = before.split(" ").filter(Boolean);
+
+    let qty = 1; // défaut : 1 pizza
+    for (
+      let i = beforeTokens.length - 1;
+      i >= 0 && i >= beforeTokens.length - 3;
+      i--
+    ) {
+      const tok = beforeTokens[i];
+
+      if (/^\d+$/.test(tok)) {
+        qty = parseInt(tok, 10);
+        break;
+      }
+
+      const numWord = NUMBER_WORDS[tok];
+      if (numWord && Number.isFinite(numWord)) {
+        qty = numWord;
+        break;
+      }
+    }
+
+    items.push({ productName: label, quantity: qty });
+  }
+
+  // Agrégation si le même produit est trouvé plusieurs fois
+  const aggregated = new Map<string, number>();
+  for (const item of items) {
+    const current = aggregated.get(item.productName) ?? 0;
+    aggregated.set(item.productName, current + item.quantity);
+  }
+
+  return Array.from(aggregated.entries()).map(([productName, quantity]) => ({
+    productName,
+    quantity,
+  }));
 }
 
 /* --------------------------------------------- */
@@ -96,7 +196,6 @@ async function createVoiceOrderLog(params: {
 
 /* --------------------------------------------- */
 /* Création d'une commande minimale dans orders  */
-/* (fallback si on ne comprend pas les produits) */
 /* --------------------------------------------- */
 async function createOrderFromTranscript(params: {
   clientId: string;
@@ -129,26 +228,6 @@ async function createOrderFromTranscript(params: {
 }
 
 /* --------------------------------------------- */
-/* Helper: récupérer les produits disponibles    */
-/* --------------------------------------------- */
-async function getAvailableProducts() {
-  const { data, error } = await supabaseAdmin
-    .from("products")
-    .select("id, name, available, is_out_of_stock");
-
-  if (error) {
-    console.error("[PRODUCTS SELECT ERROR]", error);
-    return [];
-  }
-
-  return (
-    data?.filter(
-      (p) => p.available === true && p.is_out_of_stock === false
-    ) ?? []
-  );
-}
-
-/* --------------------------------------------- */
 /* Handler principal TWILIO                      */
 /* Version: Twilio STT (Gather speech)           */
 /* --------------------------------------------- */
@@ -164,7 +243,7 @@ export async function POST(req: NextRequest) {
     const twiml = new VoiceResponse();
 
     const gather = twiml.gather({
-      input: ["speech"], // tableau, requis par les types Twilio
+      input: ["speech"], // tableau de modes d'entrée
       language: "fr-FR",
       action: "/api/voice-ai-plus",
       method: "POST",
@@ -191,20 +270,24 @@ export async function POST(req: NextRequest) {
       transcriptStatusNote = "[TWILIO_STT_EMPTY]";
     }
 
+    // 2.a) Parsing texte -> items (phase 2, step 1)
+    const parsedItems = parseFrenchOrder(effectiveTranscript);
+
     if (DEBUG) {
       console.log("📝 [VOICE-AI-PLUS TWILIO] SpeechResult:", {
         effectiveTranscript,
       });
+      console.log("🧩 [VOICE-AI-PLUS TWILIO] Parsed items:", parsedItems);
     }
 
-    // 2.a) Client (on le crée dès maintenant, même si on ne comprend pas tout)
+    // 2.b) Client
     const { clientId, clientName } = await ensureClientForPhone(from);
 
     if (DEBUG) {
       console.log("👤 [VOICE-AI-PLUS TWILIO] Client", { clientId, clientName });
     }
 
-    // 2.b) Log brut dans voice_orders
+    // 2.c) Log brut dans voice_orders
     const storedTextForVoiceOrders =
       transcriptStatusNote && transcriptStatusNote.length > 0
         ? `${callTag} | ${effectiveTranscript} | ${transcriptStatusNote}`
@@ -215,115 +298,49 @@ export async function POST(req: NextRequest) {
       storedText: storedTextForVoiceOrders,
     });
 
-    // 2.c) Essayer d'extraire une vraie commande à partir de la phrase
-    const products = await getAvailableProducts();
+    // 2.d) Préparation de la note pour orders (on ajoute le parse lisible)
+    const parsedSummary =
+      parsedItems.length > 0
+        ? ` | Items: ${parsedItems
+            .map((i) => `${i.quantity}x ${i.productName}`)
+            .join(", ")}`
+        : "";
 
-    const parsed = extractFromSpeech(effectiveTranscript, products);
+    const baseNote =
+      transcriptStatusNote && transcriptStatusNote.length > 0
+        ? `${effectiveTranscript} (${callTag}, ${transcriptStatusNote})`
+        : `${effectiveTranscript} (${callTag})`;
+
+    const noteForOrder = `${baseNote}${parsedSummary}`;
+
+    // 2.e) Création commande minimale dans orders (toujours total = 0 pour l’instant)
+    const { order, error: orderError } = await createOrderFromTranscript({
+      clientId,
+      note: noteForOrder,
+    });
 
     if (DEBUG) {
-      console.log("🧩 [VOICE-AI-PLUS TWILIO] Parsed items:", parsed.items);
-    }
-
-    let orderCreated = false;
-    let summarySpoken = "";
-
-    // 2.d) Si on a reconnu au moins un produit, on passe par /api/orders
-    if (parsed.items.length > 0) {
-      const baseUrl = new URL(req.url);
-      baseUrl.pathname = "/api/orders";
-      baseUrl.search = "";
-
-      const orderBody = {
-        phone_number: from,
-        client_name: clientName,
-        items: parsed.items.map((i) => ({
-          product_id: i.product_id,
-          quantity: i.quantity,
-        })),
-        notes: effectiveTranscript,
-        source: "twilio" as const,
-      };
-
-      if (DEBUG) {
-        console.log("📨 [VOICE-AI-PLUS TWILIO] Sending to /api/orders:", {
-          url: baseUrl.toString(),
-          body: orderBody,
-        });
-      }
-
-      const resp = await fetch(baseUrl.toString(), {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(orderBody),
+      console.log("📦 [VOICE-AI-PLUS TWILIO] Order insert", {
+        ok: !orderError,
+        orderId: order?.id,
       });
-
-      if (!resp.ok) {
-        const text = await resp.text();
-        console.error(
-          "[VOICE-AI-PLUS TWILIO] /api/orders error:",
-          resp.status,
-          text
-        );
-      } else {
-        orderCreated = true;
-
-        const json = await resp.json().catch(() => null as any);
-
-        const itemsText = parsed.items
-          .map((i) => `${i.quantity} ${i.name}`)
-          .join(" et ");
-
-        const totalPrice =
-          json?.order?.total_price ??
-          json?.order?.total ??
-          null;
-
-        if (typeof totalPrice === "number" && totalPrice > 0) {
-          summarySpoken = `Merci. Votre commande a bien été enregistrée : ${itemsText}, pour un total d'environ ${totalPrice} euros.`;
-        } else {
-          summarySpoken = `Merci. Votre commande a bien été enregistrée : ${itemsText}.`;
-        }
-      }
     }
 
-    // 2.e) Si on n'a pas réussi à créer une commande structurée,
-    // on garde le fallback "commande minimale" comme avant
-    if (!orderCreated) {
-      const noteForOrder =
-        transcriptStatusNote && transcriptStatusNote.length > 0
-          ? `${effectiveTranscript} (${callTag}, ${transcriptStatusNote})`
-          : `${effectiveTranscript} (${callTag})`;
-
-      const { order, error: orderError } = await createOrderFromTranscript({
-        clientId,
-        note: noteForOrder,
-      });
-
-      if (DEBUG) {
-        console.log("📦 [VOICE-AI-PLUS TWILIO] Fallback order insert", {
-          ok: !orderError,
-          orderId: order?.id,
-        });
-      }
-
-      if (!summarySpoken) {
-        if (
-          effectiveTranscript &&
-          effectiveTranscript !== "[EMPTY_SPEECH_RESULT]"
-        ) {
-          summarySpoken = `Merci. J'ai bien noté votre commande : ${effectiveTranscript}. Nous allons la préparer dans les meilleurs délais.`;
-        } else {
-          summarySpoken =
-            "Merci. J'ai bien reçu votre appel, mais je n'ai pas réussi à comprendre clairement votre commande. Merci de rappeler ou de passer directement au food truck pour confirmer.";
-        }
-      }
-    }
-
-    // 2.f) Réponse vocale
+    // 2.f) Réponse vocale simple (sans LLM)
     const twiml = new VoiceResponse();
-    twiml.say({ voice: "alice", language: "fr-FR" }, summarySpoken);
+
+    if (effectiveTranscript && effectiveTranscript !== "[EMPTY_SPEECH_RESULT]") {
+      twiml.say(
+        { voice: "alice", language: "fr-FR" },
+        `Merci. J'ai bien noté votre commande : ${effectiveTranscript}. Nous allons la préparer dans les meilleurs délais.`
+      );
+    } else {
+      twiml.say(
+        { voice: "alice", language: "fr-FR" },
+        "Merci. J'ai bien reçu votre appel, mais je n'ai pas réussi à comprendre clairement votre commande. Merci de rappeler ou de passer directement au food truck pour confirmer."
+      );
+    }
+
     twiml.hangup();
 
     return xmlResponse(twiml);
