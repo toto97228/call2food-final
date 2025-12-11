@@ -17,6 +17,11 @@ type ParsedItem = {
   quantity: number;
 };
 
+type CreateOrderItemsResult = {
+  totalAmount: number;
+  unresolved: string[];
+};
+
 /* --------------------------------------------- */
 /* Helper TwiML                                   */
 /* --------------------------------------------- */
@@ -228,6 +233,106 @@ async function createOrderFromTranscript(params: {
 }
 
 /* --------------------------------------------- */
+/* Création des lignes order_items + total       */
+/* --------------------------------------------- */
+async function createOrderItemsAndTotals(params: {
+  orderId: string;
+  parsedItems: ParsedItem[];
+}): Promise<CreateOrderItemsResult> {
+  const { orderId, parsedItems } = params;
+
+  if (!parsedItems.length) {
+    return { totalAmount: 0, unresolved: [] };
+  }
+
+  // Noms de produits uniques à chercher dans `products.name`
+  const productNames = Array.from(
+    new Set(parsedItems.map((i) => i.productName))
+  );
+
+  const { data: products, error: productsError } = await supabaseAdmin
+    .from("products")
+    .select("id, name, base_price, available")
+    .in("name", productNames);
+
+  if (productsError) {
+    console.error("[PRODUCTS SELECT ERROR]", productsError);
+    return { totalAmount: 0, unresolved: productNames };
+  }
+
+  const productsByName = new Map<string, any>();
+  for (const p of products ?? []) {
+    if (!p?.name) continue;
+    productsByName.set(p.name as string, p);
+  }
+
+  const rowsToInsert: {
+    order_id: string;
+    product_id: number;
+    qty: number;
+    unit_price: number;
+  }[] = [];
+
+  let totalAmount = 0;
+  const unresolved: string[] = [];
+
+  for (const item of parsedItems) {
+    const product = productsByName.get(item.productName);
+
+    if (!product || product.available === false) {
+      unresolved.push(`${item.quantity}x ${item.productName}`);
+      continue;
+    }
+
+    const unitPrice = Number(product.base_price ?? 0);
+    const lineTotal = unitPrice * item.quantity;
+    totalAmount += lineTotal;
+
+    rowsToInsert.push({
+      order_id: orderId,
+      product_id: product.id as number,
+      qty: item.quantity,
+      unit_price: unitPrice,
+    });
+  }
+
+  if (rowsToInsert.length > 0) {
+    const { error: itemsInsertError } = await supabaseAdmin
+      .from("order_items")
+      .insert(rowsToInsert);
+
+    if (itemsInsertError) {
+      console.error("[ORDER_ITEMS INSERT ERROR]", itemsInsertError);
+    }
+  }
+
+  // Met à jour l'ordre avec le total si > 0
+  if (totalAmount > 0) {
+    const { error: orderUpdateError } = await supabaseAdmin
+      .from("orders")
+      .update({
+        total: totalAmount,
+        total_price: totalAmount,
+      })
+      .eq("id", orderId);
+
+    if (orderUpdateError) {
+      console.error("[ORDERS TOTAL UPDATE ERROR]", orderUpdateError);
+    }
+  }
+
+  if (DEBUG) {
+    console.log("[ORDER_ITEMS RESULT]", {
+      orderId,
+      totalAmount,
+      unresolved,
+    });
+  }
+
+  return { totalAmount, unresolved };
+}
+
+/* --------------------------------------------- */
 /* Handler principal TWILIO                      */
 /* Version: Twilio STT (Gather speech)           */
 /* --------------------------------------------- */
@@ -270,7 +375,7 @@ export async function POST(req: NextRequest) {
       transcriptStatusNote = "[TWILIO_STT_EMPTY]";
     }
 
-    // 2.a) Parsing texte -> items (phase 2, step 1)
+    // 2.a) Parsing texte -> items (phase 2)
     const parsedItems = parseFrenchOrder(effectiveTranscript);
 
     if (DEBUG) {
@@ -298,7 +403,7 @@ export async function POST(req: NextRequest) {
       storedText: storedTextForVoiceOrders,
     });
 
-    // 2.d) Préparation de la note pour orders (on ajoute le parse lisible)
+    // 2.d) Préparation de la note pour orders (on ajoute un résumé du parse)
     const parsedSummary =
       parsedItems.length > 0
         ? ` | Items: ${parsedItems
@@ -313,7 +418,7 @@ export async function POST(req: NextRequest) {
 
     const noteForOrder = `${baseNote}${parsedSummary}`;
 
-    // 2.e) Création commande minimale dans orders (toujours total = 0 pour l’instant)
+    // 2.e) Création commande minimale dans orders
     const { order, error: orderError } = await createOrderFromTranscript({
       clientId,
       note: noteForOrder,
@@ -326,7 +431,15 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // 2.f) Réponse vocale simple (sans LLM)
+    // 2.f) Si on a une commande + des items parsés, on crée les lignes order_items
+    if (order && order.id && parsedItems.length > 0) {
+      await createOrderItemsAndTotals({
+        orderId: order.id as string,
+        parsedItems,
+      });
+    }
+
+    // 2.g) Réponse vocale simple (sans LLM)
     const twiml = new VoiceResponse();
 
     if (effectiveTranscript && effectiveTranscript !== "[EMPTY_SPEECH_RESULT]") {
