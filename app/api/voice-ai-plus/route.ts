@@ -19,70 +19,6 @@ function xmlResponse(twiml: twilio.twiml.VoiceResponse) {
 }
 
 /* --------------------------------------------- */
-/* Téléchargement Twilio Recording (auth requise)*/
-/* --------------------------------------------- */
-async function downloadRecording(url: string): Promise<ArrayBuffer> {
-  const sid = process.env.TWILIO_ACCOUNT_SID;
-  const token = process.env.TWILIO_AUTH_TOKEN;
-
-  if (!sid || !token) throw new Error("TWILIO creds manquantes");
-
-  const mp3Url = url.endsWith(".mp3") ? url : `${url}.mp3`;
-
-  const auth = Buffer.from(`${sid}:${token}`).toString("base64");
-
-  const resp = await fetch(mp3Url, {
-    headers: {
-      Authorization: `Basic ${auth}`,
-    },
-  });
-
-  if (!resp.ok) {
-    const t = await resp.text();
-    throw new Error(`Twilio DL Error ${resp.status}: ${t}`);
-  }
-
-  return await resp.arrayBuffer();
-}
-
-/* --------------------------------------------- */
-/* OpenAI STT : Whisper / gpt-4o-mini-transcribe */
-/* --------------------------------------------- */
-async function transcribeAudio(audio: ArrayBuffer): Promise<string> {
-  try {
-    const apiKey = process.env.OPENAI_API_KEY;
-    if (!apiKey) throw new Error("OPENAI_API_KEY manquant");
-
-    const form = new FormData();
-    form.append("model", "gpt-4o-mini-transcribe");
-
-    const file = new File([audio], "audio.mp3", {
-      type: "audio/mp3",
-    });
-
-    form.append("file", file);
-
-    const resp = await fetch(
-      "https://api.openai.com/v1/audio/transcriptions",
-      {
-        method: "POST",
-        headers: { Authorization: `Bearer ${apiKey}` },
-        body: form,
-      }
-    );
-
-    const data = await resp.json();
-
-    if (!resp.ok) throw new Error(JSON.stringify(data));
-
-    return data.text || "";
-  } catch (err) {
-    console.error("[STT ERROR]", err);
-    return "";
-  }
-}
-
-/* --------------------------------------------- */
 /* Client: trouver ou créer par numéro           */
 /* --------------------------------------------- */
 /**
@@ -146,6 +82,7 @@ async function ensureClientForPhone(phone: string): Promise<{
 
 /* --------------------------------------------- */
 /* Récupération AI provider du client (Supabase) */
+/* (on ne l'utilise pas vraiment en mode debug)  */
 /* --------------------------------------------- */
 async function getClientAIProvider(
   phone: string
@@ -171,24 +108,15 @@ async function getClientAIProvider(
 /* --------------------------------------------- */
 /* Log dans voice_orders                         */
 /* --------------------------------------------- */
-/**
- * Table voice_orders :
- *  id uuid DEFAULT gen_random_uuid()
- *  from_number text
- *  speech_result text
- *  created_at timestamptz DEFAULT now()
- *  product_name text
- *  quantity integer
- */
 async function createVoiceOrderLog(params: {
   fromNumber: string | null;
-  transcript: string;
+  message: string;
 }) {
-  const { fromNumber, transcript } = params;
+  const { fromNumber, message } = params;
 
   const { error } = await supabaseAdmin.from("voice_orders").insert({
     from_number: fromNumber ?? null,
-    speech_result: transcript,
+    speech_result: message,
     product_name: null,
     quantity: null,
   });
@@ -201,32 +129,20 @@ async function createVoiceOrderLog(params: {
 /* --------------------------------------------- */
 /* Création d'une commande minimale dans orders  */
 /* --------------------------------------------- */
-/**
- * Table orders :
- *  id uuid PK DEFAULT gen_random_uuid()
- *  client_id uuid NOT NULL REFERENCES clients(id)
- *  status text NOT NULL DEFAULT 'confirmed'
- *  delivery_mode text NULL
- *  delivery_address text NULL
- *  note text NULL
- *  total numeric(10,2) NOT NULL DEFAULT 0
- *  total_price numeric NULL
- *  needs_human boolean NOT NULL DEFAULT false
- */
-async function createOrderFromTranscript(params: {
+async function createOrderDebug(params: {
   clientId: string;
-  transcript: string;
+  debugNote: string;
 }) {
-  const { clientId, transcript } = params;
+  const { clientId, debugNote } = params;
 
   const { data, error } = await supabaseAdmin
     .from("orders")
     .insert({
       client_id: clientId,
-      status: "new", // cohérent avec /api/orders
+      status: "new",
       delivery_mode: null,
       delivery_address: null,
-      note: transcript || null,
+      note: debugNote,
       total: 0,
       total_price: 0,
     })
@@ -244,7 +160,7 @@ async function createOrderFromTranscript(params: {
 }
 
 /* --------------------------------------------- */
-/* Handler principal TWILIO                      */
+/* Handler principal TWILIO (MODE DEBUG)         */
 /* --------------------------------------------- */
 export async function POST(req: NextRequest) {
   const form = await req.formData();
@@ -273,103 +189,69 @@ export async function POST(req: NextRequest) {
     return xmlResponse(twiml);
   }
 
-  /* -------- 2) Deuxième passage : transcription + DB + IA ----- */
+  /* -------- 2) Deuxième passage : DEBUG DB ONLY --------------- */
   try {
-    if (DEBUG) console.log("📥 Recording URL:", recordingUrl);
+    const debugTag = `DEBUG_CALL_${callSid ?? "NO_CALLSID"}`;
 
-    const audio = await downloadRecording(recordingUrl);
-    const transcript = (await transcribeAudio(audio)).trim();
-
-    if (DEBUG) console.log("📝 Transcript:", transcript);
-
-    if (!transcript) {
-      const twiml = new VoiceResponse();
-      twiml.say(
-        { voice: "alice", language: "fr-FR" },
-        "Désolé, je n'ai pas compris votre message."
-      );
-      twiml.hangup();
-      return xmlResponse(twiml);
+    if (DEBUG) {
+      console.log("✅ [VOICE-AI-PLUS DEBUG] Second POST reçu", {
+        from,
+        callSid,
+        recordingUrl,
+      });
     }
 
-    // 2.a) client: trouver ou créer
+    // 2.a) client
     const { clientId, clientName } = await ensureClientForPhone(from);
 
-    if (DEBUG) console.log("👤 Client:", { clientId, clientName, from });
+    if (DEBUG) {
+      console.log("👤 [VOICE-AI-PLUS DEBUG] Client", { clientId, clientName });
+    }
 
-    // 2.b) log dans voice_orders (debug / historique brut)
+    // 2.b) log voice_orders
     await createVoiceOrderLog({
       fromNumber: from || null,
-      transcript,
+      message: debugTag,
     });
 
-    // 2.c) créer une commande minimale dans orders
-    const { order, error: orderError } = await createOrderFromTranscript({
+    // 2.c) order minimal
+    const { order, error: orderError } = await createOrderDebug({
       clientId,
-      transcript,
+      debugNote: debugTag,
     });
 
     if (DEBUG) {
-      console.log("📦 Order insert:", {
+      console.log("📦 [VOICE-AI-PLUS DEBUG] Order insert", {
         ok: !orderError,
         orderId: order?.id,
       });
     }
 
-    // 2.d) provider IA (en fonction de clients.ai_provider si présent)
-    const provider = await getClientAIProvider(from);
-
-    if (DEBUG) console.log("🤖 Provider:", provider);
-
-    const baseSystem =
-      "Tu es un agent vocal Call2Eat pour un food-truck pizzas et sushis. " +
-      "Tu parles en français, de manière courte, claire et professionnelle. ";
-
-    const orderInfo = orderError
-      ? "Attention: une erreur technique est survenue lors de l'enregistrement de la commande. " +
-        "Informe poliment le client qu'il est possible que la commande ne soit pas correctement sauvegardée, " +
-        "et invite-le à rappeler ou à confirmer sur place."
-      : order && order.id
-      ? `La commande a été enregistrée dans le système interne avec l'identifiant ${order.id}. `
-      : "La commande a probablement été enregistrée, mais l'identifiant n'est pas disponible. ";
-
-    const messages: AIMessage[] = [
-      {
-        role: "system",
-        content:
-          baseSystem +
-          orderInfo +
-          "Ne fais pas un long discours, reste concis. Résume simplement ce que le client a demandé et " +
-          "indique que la commande sera préparée.",
-      },
-      {
-        role: "user",
-        content:
-          "Le client a dit (transcription brute, non structurée): " + transcript,
-      },
-    ];
-
-    const aiText = await generateAIResponse({
-      provider,
-      messages,
-    });
-
+    // 2.d) réponse vocale FIXE (pas d'OpenAI en debug)
     const twiml = new VoiceResponse();
-    twiml.say(
-      { voice: "alice", language: "fr-FR" },
-      aiText ||
-        "Merci, j'ai enregistré votre commande. Elle sera préparée dans les meilleurs délais."
-    );
+
+    if (order && order.id) {
+      twiml.say(
+        { voice: "alice", language: "fr-FR" },
+        `Test technique réussi. Votre appel a bien été enregistré dans le système avec un identifiant interne. Merci et à bientôt.`
+      );
+    } else {
+      twiml.say(
+        { voice: "alice", language: "fr-FR" },
+        `Test technique partiel. J'ai reçu votre appel mais il y a peut être eu un problème lors de l'enregistrement de la commande. Merci de rappeler si nécessaire.`
+      );
+    }
+
     twiml.hangup();
 
     return xmlResponse(twiml);
   } catch (err) {
-    console.error("[VOICE IA+ ERROR]", err);
+    console.error("[VOICE IA+ DEBUG ERROR]", err);
 
     const twiml = new VoiceResponse();
     twiml.say(
       { voice: "alice", language: "fr-FR" },
-      "Une erreur est survenue lors du traitement de votre appel. Merci de rappeler un peu plus tard."
+      "Une erreur technique est survenue lors du traitement de votre appel. Merci de rappeler un peu plus tard."
     );
     twiml.hangup();
 
