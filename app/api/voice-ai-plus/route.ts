@@ -46,7 +46,7 @@ async function downloadRecording(url: string): Promise<ArrayBuffer> {
 }
 
 /* --------------------------------------------- */
-/* OpenAI STT : Whisper                          */
+/* OpenAI STT : Whisper / gpt-4o-mini-transcribe */
 /* --------------------------------------------- */
 async function transcribeAudio(audio: ArrayBuffer): Promise<string> {
   try {
@@ -62,11 +62,14 @@ async function transcribeAudio(audio: ArrayBuffer): Promise<string> {
 
     form.append("file", file);
 
-    const resp = await fetch("https://api.openai.com/v1/audio/transcriptions", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${apiKey}` },
-      body: form,
-    });
+    const resp = await fetch(
+      "https://api.openai.com/v1/audio/transcriptions",
+      {
+        method: "POST",
+        headers: { Authorization: `Bearer ${apiKey}` },
+        body: form,
+      }
+    );
 
     const data = await resp.json();
 
@@ -80,21 +83,164 @@ async function transcribeAudio(audio: ArrayBuffer): Promise<string> {
 }
 
 /* --------------------------------------------- */
+/* Client: trouver ou créer par numéro           */
+/* --------------------------------------------- */
+/**
+ * Table clients :
+ *  id uuid PRIMARY KEY
+ *  name text NOT NULL
+ *  phone text NOT NULL UNIQUE
+ *  address text NULL
+ *  ai_provider text NULL DEFAULT 'openai'
+ */
+async function ensureClientForPhone(phone: string): Promise<{
+  clientId: string;
+  clientName: string;
+}> {
+  if (!phone) {
+    throw new Error("From (phone) manquant dans la requête Twilio");
+  }
+
+  const { data: existingClient, error: clientSelectError } =
+    await supabaseAdmin
+      .from("clients")
+      .select("id, name, phone, ai_provider")
+      .eq("phone", phone)
+      .maybeSingle();
+
+  if (clientSelectError) {
+    console.error("[CLIENT SELECT ERROR]", clientSelectError);
+    throw clientSelectError;
+  }
+
+  if (existingClient) {
+    return {
+      clientId: existingClient.id as string,
+      clientName: (existingClient.name as string) ?? `Client ${phone}`,
+    };
+  }
+
+  const defaultName = `Client ${phone}`;
+
+  const { data: insertedClient, error: clientInsertError } =
+    await supabaseAdmin
+      .from("clients")
+      .insert({
+        name: defaultName,
+        phone,
+      })
+      .select("id, name, phone, ai_provider")
+      .single();
+
+  if (clientInsertError || !insertedClient) {
+    console.error("[CLIENT INSERT ERROR]", clientInsertError);
+    throw clientInsertError ?? new Error("client_insert_failed");
+  }
+
+  return {
+    clientId: insertedClient.id as string,
+    clientName:
+      (insertedClient.name as string | null | undefined) ?? defaultName,
+  };
+}
+
+/* --------------------------------------------- */
 /* Récupération AI provider du client (Supabase) */
 /* --------------------------------------------- */
-async function getClientAIProvider(phone: string): Promise<"openai" | "deepseek"> {
+async function getClientAIProvider(
+  phone: string
+): Promise<"openai" | "deepseek"> {
+  if (!phone) return "openai";
+
   const { data, error } = await supabaseAdmin
     .from("clients")
     .select("ai_provider")
     .eq("phone", phone)
     .maybeSingle();
 
-  if (error || !data) {
-    console.warn("Client not found, fallback OpenAI");
+  if (error || !data || !data.ai_provider) {
+    console.warn("[AI PROVIDER] client not found or no provider, fallback openai");
     return "openai";
   }
 
-  return (data.ai_provider as "openai" | "deepseek") ?? "openai";
+  const value = String(data.ai_provider).toLowerCase();
+  if (value === "deepseek") return "deepseek";
+  return "openai";
+}
+
+/* --------------------------------------------- */
+/* Log dans voice_orders                         */
+/* --------------------------------------------- */
+/**
+ * Table voice_orders :
+ *  id uuid DEFAULT gen_random_uuid()
+ *  from_number text
+ *  speech_result text
+ *  created_at timestamptz DEFAULT now()
+ *  product_name text
+ *  quantity integer
+ */
+async function createVoiceOrderLog(params: {
+  fromNumber: string | null;
+  transcript: string;
+}) {
+  const { fromNumber, transcript } = params;
+
+  const { error } = await supabaseAdmin.from("voice_orders").insert({
+    from_number: fromNumber ?? null,
+    speech_result: transcript,
+    product_name: null,
+    quantity: null,
+  });
+
+  if (error) {
+    console.error("[VOICE_ORDERS INSERT ERROR]", error);
+  }
+}
+
+/* --------------------------------------------- */
+/* Création d'une commande minimale dans orders  */
+/* --------------------------------------------- */
+/**
+ * Table orders :
+ *  id uuid PK DEFAULT gen_random_uuid()
+ *  client_id uuid NOT NULL REFERENCES clients(id)
+ *  status text NOT NULL DEFAULT 'confirmed'
+ *  delivery_mode text NULL
+ *  delivery_address text NULL
+ *  note text NULL
+ *  total numeric(10,2) NOT NULL DEFAULT 0
+ *  total_price numeric NULL
+ *  needs_human boolean NOT NULL DEFAULT false
+ */
+async function createOrderFromTranscript(params: {
+  clientId: string;
+  transcript: string;
+}) {
+  const { clientId, transcript } = params;
+
+  const { data, error } = await supabaseAdmin
+    .from("orders")
+    .insert({
+      client_id: clientId,
+      status: "new", // cohérent avec /api/orders
+      delivery_mode: null,
+      delivery_address: null,
+      note: transcript || null,
+      total: 0,
+      total_price: 0,
+    })
+    .select(
+      "id, client_id, status, delivery_mode, delivery_address, note, total, total_price, created_at"
+    )
+    .single();
+
+  if (error || !data) {
+    console.error("[ORDERS INSERT ERROR]", error);
+    return { order: null as any, error };
+  }
+
+  return { order: data, error: null };
 }
 
 /* --------------------------------------------- */
@@ -105,6 +251,7 @@ export async function POST(req: NextRequest) {
 
   const recordingUrl = form.get("RecordingUrl")?.toString();
   const from = form.get("From")?.toString() || "";
+  const callSid = form.get("CallSid")?.toString() || null;
 
   /* -------- 1) Premier passage : pas d'enregistrement -------- */
   if (!recordingUrl) {
@@ -126,16 +273,16 @@ export async function POST(req: NextRequest) {
     return xmlResponse(twiml);
   }
 
-  /* -------- 2) Deuxième passage : transcription + IA -------- */
+  /* -------- 2) Deuxième passage : transcription + DB + IA ----- */
   try {
-    if (DEBUG) console.log("📥 Recording:", recordingUrl);
+    if (DEBUG) console.log("📥 Recording URL:", recordingUrl);
 
     const audio = await downloadRecording(recordingUrl);
-    const transcript = await transcribeAudio(audio);
+    const transcript = (await transcribeAudio(audio)).trim();
 
     if (DEBUG) console.log("📝 Transcript:", transcript);
 
-    if (!transcript.trim()) {
+    if (!transcript) {
       const twiml = new VoiceResponse();
       twiml.say(
         { voice: "alice", language: "fr-FR" },
@@ -145,17 +292,61 @@ export async function POST(req: NextRequest) {
       return xmlResponse(twiml);
     }
 
-    /* ---- 3) Sélection moteur IA selon le client ---- */
+    // 2.a) client: trouver ou créer
+    const { clientId, clientName } = await ensureClientForPhone(from);
+
+    if (DEBUG) console.log("👤 Client:", { clientId, clientName, from });
+
+    // 2.b) log dans voice_orders (debug / historique brut)
+    await createVoiceOrderLog({
+      fromNumber: from || null,
+      transcript,
+    });
+
+    // 2.c) créer une commande minimale dans orders
+    const { order, error: orderError } = await createOrderFromTranscript({
+      clientId,
+      transcript,
+    });
+
+    if (DEBUG) {
+      console.log("📦 Order insert:", {
+        ok: !orderError,
+        orderId: order?.id,
+      });
+    }
+
+    // 2.d) provider IA (en fonction de clients.ai_provider si présent)
     const provider = await getClientAIProvider(from);
 
     if (DEBUG) console.log("🤖 Provider:", provider);
 
+    const baseSystem =
+      "Tu es un agent vocal Call2Eat pour un food-truck pizzas et sushis. " +
+      "Tu parles en français, de manière courte, claire et professionnelle. ";
+
+    const orderInfo = orderError
+      ? "Attention: une erreur technique est survenue lors de l'enregistrement de la commande. " +
+        "Informe poliment le client qu'il est possible que la commande ne soit pas correctement sauvegardée, " +
+        "et invite-le à rappeler ou à confirmer sur place."
+      : order && order.id
+      ? `La commande a été enregistrée dans le système interne avec l'identifiant ${order.id}. `
+      : "La commande a probablement été enregistrée, mais l'identifiant n'est pas disponible. ";
+
     const messages: AIMessage[] = [
       {
         role: "system",
-        content: "Tu es un agent vocal Call2Eat. Réponds brièvement, en restant professionnel.",
+        content:
+          baseSystem +
+          orderInfo +
+          "Ne fais pas un long discours, reste concis. Résume simplement ce que le client a demandé et " +
+          "indique que la commande sera préparée.",
       },
-      { role: "user", content: transcript },
+      {
+        role: "user",
+        content:
+          "Le client a dit (transcription brute, non structurée): " + transcript,
+      },
     ];
 
     const aiText = await generateAIResponse({
@@ -163,9 +354,12 @@ export async function POST(req: NextRequest) {
       messages,
     });
 
-    /* ---- 4) Réponse au client ---- */
     const twiml = new VoiceResponse();
-    twiml.say({ voice: "alice", language: "fr-FR" }, aiText || "Commande reçue !");
+    twiml.say(
+      { voice: "alice", language: "fr-FR" },
+      aiText ||
+        "Merci, j'ai enregistré votre commande. Elle sera préparée dans les meilleurs délais."
+    );
     twiml.hangup();
 
     return xmlResponse(twiml);
@@ -175,7 +369,7 @@ export async function POST(req: NextRequest) {
     const twiml = new VoiceResponse();
     twiml.say(
       { voice: "alice", language: "fr-FR" },
-      "Une erreur est survenue lors du traitement de votre appel."
+      "Une erreur est survenue lors du traitement de votre appel. Merci de rappeler un peu plus tard."
     );
     twiml.hangup();
 
