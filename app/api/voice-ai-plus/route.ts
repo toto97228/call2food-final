@@ -3,8 +3,9 @@ import { NextRequest, NextResponse } from "next/server";
 import twilio from "twilio";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 
-const DEBUG = true;
+export const runtime = "nodejs"; // important pour utiliser le SDK Twilio
 
+const DEBUG = true;
 const VoiceResponse = twilio.twiml.VoiceResponse;
 
 /* --------------------------------------------- */
@@ -20,14 +21,6 @@ function xmlResponse(twiml: twilio.twiml.VoiceResponse) {
 /* --------------------------------------------- */
 /* Client: trouver ou créer par numéro           */
 /* --------------------------------------------- */
-/**
- * Table clients :
- *  id uuid PRIMARY KEY
- *  name text NOT NULL
- *  phone text NOT NULL UNIQUE
- *  address text NULL
- *  ai_provider text NULL DEFAULT 'openai'
- */
 async function ensureClientForPhone(phone: string): Promise<{
   clientId: string;
   clientName: string;
@@ -81,14 +74,6 @@ async function ensureClientForPhone(phone: string): Promise<{
 
 /* --------------------------------------------- */
 /* Log dans voice_orders                         */
-/* voice_orders :
- *  id uuid
- *  from_number text
- *  speech_result text
- *  created_at timestamptz default now()
- *  product_name text
- *  quantity integer
- */
 /* --------------------------------------------- */
 async function createVoiceOrderLog(params: {
   fromNumber: string | null;
@@ -110,17 +95,6 @@ async function createVoiceOrderLog(params: {
 
 /* --------------------------------------------- */
 /* Création d'une commande minimale dans orders  */
-/* orders :
- *  id uuid PK
- *  client_id uuid NOT NULL
- *  status text NOT NULL
- *  delivery_mode text
- *  delivery_address text
- *  note text
- *  total numeric(10,2) NOT NULL
- *  total_price numeric
- *  needs_human boolean
- */
 /* --------------------------------------------- */
 async function createOrderFromTranscript(params: {
   clientId: string;
@@ -132,7 +106,7 @@ async function createOrderFromTranscript(params: {
     .from("orders")
     .insert({
       client_id: clientId,
-      status: "new", // cohérent avec /api/orders
+      status: "new",
       delivery_mode: null,
       delivery_address: null,
       note,
@@ -168,19 +142,16 @@ export async function POST(req: NextRequest) {
     const twiml = new VoiceResponse();
 
     const gather = twiml.gather({
-      input: "speech",
+      input: ["speech"],          // <<<<<< ICI: tableau, plus de string simple
       language: "fr-FR",
       action: "/api/voice-ai-plus",
       method: "POST",
-      // on peut ajouter d'autres options plus tard (hints, timeout, etc.)
     });
 
     gather.say(
       { voice: "alice", language: "fr-FR" },
       "Bonjour, dites votre commande pour le food truck après le bip. Quand vous avez terminé, restez silencieux quelques secondes."
     );
-
-    // En cas d'absence totale d'input, on peut prévoir un fallback plus tard
 
     return xmlResponse(twiml);
   }
