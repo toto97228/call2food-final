@@ -2,6 +2,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import twilio from "twilio";
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
+import {
+  parseOrderWithGemini,
+  ParsedOrderItem,
+} from "@/lib/parseOrderWithGemini";
 
 export const runtime = "nodejs"; // important pour utiliser le SDK Twilio
 
@@ -73,7 +77,7 @@ function normalizeForParsing(text: string): string {
 }
 
 /**
- * Exemple géré :
+ * Exemple géré (fallback) :
  * "je voudrais deux reines et une 4 fromages"
  * => [
  *   { productName: "reine", quantity: 2 },
@@ -383,14 +387,53 @@ export async function POST(req: NextRequest) {
       transcriptStatusNote = "[TWILIO_STT_EMPTY]";
     }
 
-    // 2.a) Parsing texte -> items
-    const parsedItems = parseFrenchOrder(effectiveTranscript);
+    // 2.a) Parsing avec GEMINI -> items
+    let parsedItems: ParsedItem[] = [];
+
+    try {
+      const geminiItems: ParsedOrderItem[] = await parseOrderWithGemini(
+        effectiveTranscript
+      );
+
+      parsedItems = geminiItems
+        .filter(
+          (i) =>
+            i.product &&
+            typeof i.product === "string" &&
+            i.product.trim().length > 0 &&
+            typeof i.qty === "number" &&
+            i.qty > 0
+        )
+        .map((i) => ({
+          productName: i.product.trim(),
+          quantity: i.qty,
+        }));
+
+      if (DEBUG) {
+        console.log("🧠 [GEMINI PARSE] items:", geminiItems);
+        console.log("🧠 [GEMINI → ParsedItem] mapped:", parsedItems);
+      }
+    } catch (e) {
+      console.error("[GEMINI PARSE EXCEPTION]", e);
+    }
+
+    // Fallback sur parseur naïf si Gemini ne renvoie rien d'exploitable
+    if (parsedItems.length === 0) {
+      const fallbackItems = parseFrenchOrder(effectiveTranscript);
+      parsedItems = fallbackItems;
+      if (DEBUG) {
+        console.log(
+          "🔁 [FALLBACK] parseFrenchOrder utilisé, items:",
+          fallbackItems
+        );
+      }
+    }
 
     if (DEBUG) {
       console.log("📝 [VOICE-AI-PLUS TWILIO] SpeechResult:", {
         effectiveTranscript,
       });
-      console.log("🧩 [VOICE-AI-PLUS TWILIO] Parsed items:", parsedItems);
+      console.log("🧩 [VOICE-AI-PLUS TWILIO] Parsed items (final):", parsedItems);
     }
 
     // 2.b) Client
@@ -447,7 +490,7 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // 2.g) Réponse vocale simple (sans LLM)
+    // 2.g) Réponse vocale simple (sans LLM côté Twilio)
     const twiml = new VoiceResponse();
 
     if (effectiveTranscript && effectiveTranscript !== "[EMPTY_SPEECH_RESULT]") {
