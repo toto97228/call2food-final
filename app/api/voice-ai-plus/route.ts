@@ -13,18 +13,14 @@ const VoiceResponse = twilio.twiml.VoiceResponse;
 /* --------------------------------------------- */
 
 type ParsedItem = {
-  productName: string;
+  productName: string; // doit matcher products.name
   quantity: number;
-};
-
-type CreateOrderItemsResult = {
-  totalAmount: number;
-  unresolved: string[];
 };
 
 /* --------------------------------------------- */
 /* Helper TwiML                                   */
 /* --------------------------------------------- */
+
 function xmlResponse(twiml: twilio.twiml.VoiceResponse) {
   return new NextResponse(twiml.toString(), {
     status: 200,
@@ -47,12 +43,24 @@ const NUMBER_WORDS: Record<string, number> = {
   cinq: 5,
 };
 
+// ATTENTION: label doit être EXACTEMENT = products.name
 const PRODUCT_KEYWORDS: { key: string; label: string }[] = [
-  { key: "margarita", label: "Margarita" },
-  { key: "margherita", label: "Margarita" },
-  { key: "reine", label: "Reine" },
-  { key: "4 fromages", label: "4 fromages" },
-  { key: "quatre fromages", label: "4 fromages" },
+  // Margherita (id 1)
+  { key: "margarita", label: "Margherita" },
+  { key: "margherita", label: "Margherita" },
+  { key: "marguerita", label: "Margherita" },
+
+  // Reine (id 6)
+  { key: "reine", label: "reine" },
+
+  // 3 Fromages (id 3)
+  { key: "3 fromages", label: "3 Fromages" },
+  { key: "trois fromages", label: "3 Fromages" },
+  { key: "quatre fromages", label: "3 Fromages" }, // au cas où tu dis 4
+  { key: "4 fromages", label: "3 Fromages" },
+
+  // Exemple pour plus tard : supplément jambon (id 2)
+  { key: "supplément jambon", label: "Supplément jambon" },
 ];
 
 function normalizeForParsing(text: string): string {
@@ -67,10 +75,10 @@ function normalizeForParsing(text: string): string {
 
 /**
  * Exemple géré :
- * "je voudrais deux reines et une 4 fromages"
+ * "je voudrais deux reines et une 3 fromages"
  * => [
- *   { productName: "Reine", quantity: 2 },
- *   { productName: "4 fromages", quantity: 1 }
+ *   { productName: "reine", quantity: 2 },
+ *   { productName: "3 Fromages", quantity: 1 }
  * ]
  */
 function parseFrenchOrder(text: string): ParsedItem[] {
@@ -88,7 +96,7 @@ function parseFrenchOrder(text: string): ParsedItem[] {
     const before = normalized.slice(0, idx).trim();
     const beforeTokens = before.split(" ").filter(Boolean);
 
-    let qty = 1; // défaut : 1 pizza
+    let qty = 1; // défaut : 1
     for (
       let i = beforeTokens.length - 1;
       i >= 0 && i >= beforeTokens.length - 3;
@@ -127,6 +135,7 @@ function parseFrenchOrder(text: string): ParsedItem[] {
 /* --------------------------------------------- */
 /* Client: trouver ou créer par numéro           */
 /* --------------------------------------------- */
+
 async function ensureClientForPhone(phone: string): Promise<{
   clientId: string;
   clientName: string;
@@ -181,6 +190,7 @@ async function ensureClientForPhone(phone: string): Promise<{
 /* --------------------------------------------- */
 /* Log dans voice_orders                         */
 /* --------------------------------------------- */
+
 async function createVoiceOrderLog(params: {
   fromNumber: string | null;
   storedText: string;
@@ -202,6 +212,7 @@ async function createVoiceOrderLog(params: {
 /* --------------------------------------------- */
 /* Création d'une commande minimale dans orders  */
 /* --------------------------------------------- */
+
 async function createOrderFromTranscript(params: {
   clientId: string;
   note: string;
@@ -233,109 +244,110 @@ async function createOrderFromTranscript(params: {
 }
 
 /* --------------------------------------------- */
-/* Création des lignes order_items + total       */
+/* Création des order_items + mise à jour total  */
 /* --------------------------------------------- */
+
 async function createOrderItemsAndTotals(params: {
   orderId: string;
-  parsedItems: ParsedItem[];
-}): Promise<CreateOrderItemsResult> {
-  const { orderId, parsedItems } = params;
+  items: ParsedItem[];
+}) {
+  const { orderId, items } = params;
 
-  if (!parsedItems.length) {
-    return { totalAmount: 0, unresolved: [] };
+  if (!items || items.length === 0) {
+    return { totalQty: 0, totalPrice: 0 };
   }
 
-  // Noms de produits uniques à chercher dans `products.name`
-  const productNames = Array.from(
-    new Set(parsedItems.map((i) => i.productName))
+  const uniqueNames = Array.from(
+    new Set(items.map((i) => i.productName))
   );
 
   const { data: products, error: productsError } = await supabaseAdmin
     .from("products")
-    .select("id, name, base_price, available")
-    .in("name", productNames);
+    .select("id, name, base_price")
+    .in("name", uniqueNames);
 
   if (productsError) {
     console.error("[PRODUCTS SELECT ERROR]", productsError);
-    return { totalAmount: 0, unresolved: productNames };
+    return { totalQty: 0, totalPrice: 0 };
   }
 
-  const productsByName = new Map<string, any>();
+  const productMap = new Map<string, { id: number; base_price: number }>();
   for (const p of products ?? []) {
-    if (!p?.name) continue;
-    productsByName.set(p.name as string, p);
+    productMap.set(p.name as string, {
+      id: p.id as number,
+      base_price: Number(p.base_price),
+    });
   }
 
-  const rowsToInsert: {
+  const orderItemsRows: {
     order_id: string;
     product_id: number;
     qty: number;
     unit_price: number;
+    total_price: number;
   }[] = [];
 
-  let totalAmount = 0;
-  const unresolved: string[] = [];
+  let totalQty = 0;
+  let totalPrice = 0;
 
-  for (const item of parsedItems) {
-    const product = productsByName.get(item.productName);
-
-    if (!product || product.available === false) {
-      unresolved.push(`${item.quantity}x ${item.productName}`);
+  for (const item of items) {
+    const product = productMap.get(item.productName);
+    if (!product) {
+      console.warn(
+        "[ORDER_ITEMS WARNING] Produit non trouvé pour",
+        item.productName
+      );
       continue;
     }
 
-    const unitPrice = Number(product.base_price ?? 0);
+    const unitPrice = product.base_price;
     const lineTotal = unitPrice * item.quantity;
-    totalAmount += lineTotal;
 
-    rowsToInsert.push({
+    orderItemsRows.push({
       order_id: orderId,
-      product_id: product.id as number,
+      product_id: product.id,
       qty: item.quantity,
       unit_price: unitPrice,
+      total_price: lineTotal,
     });
+
+    totalQty += item.quantity;
+    totalPrice += lineTotal;
   }
 
-  if (rowsToInsert.length > 0) {
-    const { error: itemsInsertError } = await supabaseAdmin
-      .from("order_items")
-      .insert(rowsToInsert);
-
-    if (itemsInsertError) {
-      console.error("[ORDER_ITEMS INSERT ERROR]", itemsInsertError);
-    }
+  if (orderItemsRows.length === 0) {
+    return { totalQty: 0, totalPrice: 0 };
   }
 
-  // Met à jour l'ordre avec le total si > 0
-  if (totalAmount > 0) {
-    const { error: orderUpdateError } = await supabaseAdmin
-      .from("orders")
-      .update({
-        total: totalAmount,
-        total_price: totalAmount,
-      })
-      .eq("id", orderId);
+  const { error: orderItemsError } = await supabaseAdmin
+    .from("order_items")
+    .insert(orderItemsRows);
 
-    if (orderUpdateError) {
-      console.error("[ORDERS TOTAL UPDATE ERROR]", orderUpdateError);
-    }
+  if (orderItemsError) {
+    console.error("[ORDER_ITEMS INSERT ERROR]", orderItemsError);
+    // on continue quand même sans casser l'appel vocal
   }
 
-  if (DEBUG) {
-    console.log("[ORDER_ITEMS RESULT]", {
-      orderId,
-      totalAmount,
-      unresolved,
-    });
+  const { error: updateOrderError } = await supabaseAdmin
+    .from("orders")
+    .update({
+      total: totalQty,
+      total_price: totalPrice,
+    })
+    .eq("id", orderId);
+
+  if (updateOrderError) {
+    console.error("[ORDERS UPDATE TOTAL ERROR]", updateOrderError);
   }
 
-  return { totalAmount, unresolved };
+  return { totalQty, totalPrice };
 }
 
 /* --------------------------------------------- */
 /* Handler principal TWILIO                      */
 /* Version: Twilio STT (Gather speech)           */
 /* --------------------------------------------- */
+
 export async function POST(req: NextRequest) {
   const form = await req.formData();
 
@@ -375,7 +387,7 @@ export async function POST(req: NextRequest) {
       transcriptStatusNote = "[TWILIO_STT_EMPTY]";
     }
 
-    // 2.a) Parsing texte -> items (phase 2)
+    // 2.a) Parsing texte -> items
     const parsedItems = parseFrenchOrder(effectiveTranscript);
 
     if (DEBUG) {
@@ -403,7 +415,7 @@ export async function POST(req: NextRequest) {
       storedText: storedTextForVoiceOrders,
     });
 
-    // 2.d) Préparation de la note pour orders (on ajoute un résumé du parse)
+    // 2.d) Préparation de la note pour orders (on ajoute le parse lisible)
     const parsedSummary =
       parsedItems.length > 0
         ? ` | Items: ${parsedItems
@@ -431,12 +443,19 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // 2.f) Si on a une commande + des items parsés, on crée les lignes order_items
+    // 2.f) Création des order_items + mise à jour du total
     if (order && order.id && parsedItems.length > 0) {
-      await createOrderItemsAndTotals({
+      const { totalQty, totalPrice } = await createOrderItemsAndTotals({
         orderId: order.id as string,
-        parsedItems,
+        items: parsedItems,
       });
+
+      if (DEBUG) {
+        console.log("🧮 [VOICE-AI-PLUS TWILIO] Totaux mis à jour", {
+          totalQty,
+          totalPrice,
+        });
+      }
     }
 
     // 2.g) Réponse vocale simple (sans LLM)
