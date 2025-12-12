@@ -18,7 +18,7 @@ type ParsedItem = {
 };
 
 /* --------------------------------------------- */
-/* Helper TwiML                                   */
+/* Helper TwiML                                  */
 /* --------------------------------------------- */
 function xmlResponse(twiml: twilio.twiml.VoiceResponse) {
   return new NextResponse(twiml.toString(), {
@@ -42,28 +42,12 @@ const NUMBER_WORDS: Record<string, number> = {
   cinq: 5,
 };
 
-/**
- * IMPORTANT :
- * Les labels doivent correspondre exactement aux colonnes "name" de public.products
- *
- * Table products actuelle (d’après ton screenshot) :
- *  - "Margherita"
- *  - "Supplément jambon"
- *  - "3 Fromages"
- *  - "reine"
- */
 const PRODUCT_KEYWORDS: { key: string; label: string }[] = [
-  // Margherita
-  { key: "margarita", label: "Margherita" },
-  { key: "margherita", label: "Margherita" },
-
-  // Reine
-  { key: "reine", label: "reine" },
-
-  // 3/4 fromages -> on mappe sur "3 Fromages"
-  { key: "4 fromages", label: "3 Fromages" },
-  { key: "quatre fromages", label: "3 Fromages" },
-  { key: "3 fromages", label: "3 Fromages" },
+  { key: "margarita", label: "Margarita" },
+  { key: "margherita", label: "Margarita" },
+  { key: "reine", label: "Reine" },
+  { key: "4 fromages", label: "4 fromages" },
+  { key: "quatre fromages", label: "4 fromages" },
 ];
 
 function normalizeForParsing(text: string): string {
@@ -80,8 +64,8 @@ function normalizeForParsing(text: string): string {
  * Exemple géré :
  * "je voudrais deux reines et une 4 fromages"
  * => [
- *   { productName: "reine", quantity: 2 },
- *   { productName: "3 Fromages", quantity: 1 }
+ *   { productName: "Reine", quantity: 2 },
+ *   { productName: "4 fromages", quantity: 1 }
  * ]
  */
 function parseFrenchOrder(text: string): ParsedItem[] {
@@ -97,7 +81,9 @@ function parseFrenchOrder(text: string): ParsedItem[] {
 
     // On regarde 3 mots avant le mot-clé pour trouver la quantité
     const before = normalized.slice(0, idx).trim();
-    const beforeTokens = before.split(" ").filter(Boolean);
+    const beforeTokens = before.split("").length
+      ? before.split(" ").filter(Boolean)
+      : [];
 
     let qty = 1; // défaut : 1 pizza
     for (
@@ -244,112 +230,6 @@ async function createOrderFromTranscript(params: {
 }
 
 /* --------------------------------------------- */
-/* Création des order_items + mise à jour totals */
-/* --------------------------------------------- */
-
-async function createOrderItemsFromParsed(params: {
-  orderId: string;
-  items: ParsedItem[];
-}) {
-  const { orderId, items } = params;
-  if (!items.length) return;
-
-  // Noms de produits distincts
-  const productNames = Array.from(
-    new Set(items.map((i) => i.productName))
-  );
-
-  // On récupère les produits correspondants
-  const { data: products, error: productsError } = await supabaseAdmin
-    .from("products")
-    .select("id, name, base_price")
-    .in("name", productNames);
-
-  if (productsError) {
-    console.error("[PRODUCTS SELECT ERROR]", productsError);
-    return;
-  }
-
-  if (!products || products.length === 0) {
-    console.warn("[PRODUCTS SELECT] Aucun produit trouvé pour", productNames);
-    return;
-  }
-
-  const productMap = new Map<
-    string,
-    { id: number; base_price: number }
-  >();
-
-  for (const p of products as any[]) {
-    const basePriceNumber = Number(p.base_price ?? 0);
-    productMap.set(p.name as string, {
-      id: p.id as number,
-      base_price: basePriceNumber,
-    });
-  }
-
-  const orderItemsPayload: any[] = [];
-  let totalQty = 0;
-  let totalPrice = 0;
-
-  for (const item of items) {
-    const product = productMap.get(item.productName);
-    if (!product) {
-      console.warn(
-        `[PARSE] Aucun produit "products" pour "${item.productName}"`
-      );
-      continue;
-    }
-
-    const linePrice = product.base_price * item.quantity;
-
-    orderItemsPayload.push({
-      order_id: orderId,
-      product_id: product.id,
-      qty: item.quantity,
-      unit_price: product.base_price,
-    });
-
-    totalQty += item.quantity;
-    totalPrice += linePrice;
-  }
-
-  if (!orderItemsPayload.length) {
-    console.warn("[ORDER_ITEMS] Aucun item à insérer (tout a été filtré).");
-    return;
-  }
-
-  const { error: insertItemsError } = await supabaseAdmin
-    .from("order_items")
-    .insert(orderItemsPayload);
-
-  if (insertItemsError) {
-    console.error("[ORDER_ITEMS INSERT ERROR]", insertItemsError);
-  }
-
-  const { error: updateOrderError } = await supabaseAdmin
-    .from("orders")
-    .update({
-      total: totalQty,
-      total_price: totalPrice,
-    })
-    .eq("id", orderId);
-
-  if (updateOrderError) {
-    console.error("[ORDERS UPDATE TOTALS ERROR]", updateOrderError);
-  }
-
-  if (DEBUG) {
-    console.log("[ORDER_ITEMS] Créés", {
-      orderId,
-      totalQty,
-      totalPrice,
-      items: orderItemsPayload,
-    });
-  }
-}
-
-/* --------------------------------------------- */
 /* Handler principal TWILIO                      */
 /* Version: Twilio STT (Gather speech)           */
 /* --------------------------------------------- */
@@ -435,7 +315,7 @@ export async function POST(req: NextRequest) {
 
     const noteForOrder = `${baseNote}${parsedSummary}`;
 
-    // 2.e) Création commande minimale dans orders (total = 0 au départ)
+    // 2.e) Création commande minimale dans orders (total = 0 pour l’instant)
     const { order, error: orderError } = await createOrderFromTranscript({
       clientId,
       note: noteForOrder,
@@ -448,12 +328,104 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // 2.f) Si on a une commande + des items parsés, on crée les order_items
-    if (order && !orderError && parsedItems.length > 0) {
-      await createOrderItemsFromParsed({
-        orderId: order.id,
-        items: parsedItems,
-      });
+    // 2.f) Création des order_items + mise à jour du total si on a des produits parsés
+    if (order && parsedItems.length > 0) {
+      const productNames = parsedItems.map((i) => i.productName);
+
+      const { data: products, error: productsError } = await supabaseAdmin
+        .from("products")
+        .select("id, name, base_price")
+        .in("name", productNames);
+
+      if (productsError) {
+        console.error("[PRODUCTS SELECT ERROR]", productsError);
+      } else if (products && products.length > 0) {
+        const productByName = new Map<
+          string,
+          { id: number; base_price: number }
+        >();
+
+        for (const p of products as any[]) {
+          productByName.set(p.name, {
+            id: p.id,
+            base_price: Number(p.base_price),
+          });
+        }
+
+        const itemsToInsert: {
+          order_id: string;
+          product_id: number;
+          qty: number;
+          unit_price: number;
+        }[] = [];
+
+        for (const item of parsedItems) {
+          const product = productByName.get(item.productName);
+          if (!product) {
+            if (DEBUG) {
+              console.log(
+                "[VOICE-AI-PLUS TWILIO] Produit non trouvé dans products:",
+                item.productName
+              );
+            }
+            continue;
+          }
+
+          itemsToInsert.push({
+            order_id: order.id,
+            product_id: product.id,
+            qty: item.quantity,
+            unit_price: product.base_price,
+          });
+        }
+
+        if (itemsToInsert.length > 0) {
+          const { error: itemsError } = await supabaseAdmin
+            .from("order_items")
+            .insert(itemsToInsert);
+
+          if (itemsError) {
+            console.error("[ORDER_ITEMS INSERT ERROR]", itemsError);
+          } else if (DEBUG) {
+            console.log(
+              "[VOICE-AI-PLUS TWILIO] order_items inserted:",
+              itemsToInsert
+            );
+          }
+
+          const totalQty = itemsToInsert.reduce(
+            (sum, it) => sum + it.qty,
+            0
+          );
+          const totalPrice = itemsToInsert.reduce(
+            (sum, it) => sum + it.qty * it.unit_price,
+            0
+          );
+
+          const { error: orderUpdateError } = await supabaseAdmin
+            .from("orders")
+            .update({
+              total: totalQty,
+              total_price: totalPrice,
+            })
+            .eq("id", order.id);
+
+          if (orderUpdateError) {
+            console.error("[ORDERS UPDATE TOTAL ERROR]", orderUpdateError);
+          } else if (DEBUG) {
+            console.log("[VOICE-AI-PLUS TWILIO] Order totals updated:", {
+              orderId: order.id,
+              totalQty,
+              totalPrice,
+            });
+          }
+        }
+      } else if (DEBUG) {
+        console.log(
+          "[VOICE-AI-PLUS TWILIO] Aucun produit trouvé pour",
+          productNames
+        );
+      }
     }
 
     // 2.g) Réponse vocale simple (sans LLM)
