@@ -4,15 +4,6 @@ import { createOrderFromNames } from '@/lib/createOrderFromNames';
 
 export const runtime = 'nodejs';
 
-export async function OPTIONS() {
-  return new NextResponse(null, {
-    status: 200,
-    headers: {
-      Allow: 'POST, OPTIONS',
-    },
-  });
-}
-
 export async function POST(req: NextRequest) {
   if (!checkAdminAuth(req.headers)) {
     return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
@@ -20,7 +11,7 @@ export async function POST(req: NextRequest) {
 
   const body = await req.json();
 
-  // Debug / test direct
+  // 1) Format simple (debug / tests)
   if (body?.customer_phone && Array.isArray(body?.items)) {
     const result = await createOrderFromNames({
       phone: body.customer_phone,
@@ -28,13 +19,10 @@ export async function POST(req: NextRequest) {
       notes: body.notes,
       callId: body.call_id ?? 'direct_test',
     });
-
-    return NextResponse.json({
-      results: [{ toolCallId: 'direct', result }],
-    });
+    return NextResponse.json({ results: [{ toolCallId: 'direct', result }] });
   }
 
-  // Vapi tool format
+  // 2) Format Vapi tool
   const toolCalls = body?.message?.toolCallList;
   if (!Array.isArray(toolCalls)) {
     return NextResponse.json({ error: 'invalid_payload' }, { status: 400 });
@@ -45,7 +33,6 @@ export async function POST(req: NextRequest) {
   for (const call of toolCalls) {
     try {
       const { customer_phone, items, notes, call_id } = call.arguments ?? {};
-
       const result = await createOrderFromNames({
         phone: customer_phone,
         items,
@@ -55,10 +42,7 @@ export async function POST(req: NextRequest) {
 
       results.push({ toolCallId: call.id, result });
     } catch (e: any) {
-      results.push({
-        toolCallId: call?.id ?? 'unknown',
-        result: { ok: false, error: e?.message ?? 'unknown_error' },
-      });
+      results.push({ toolCallId: call.id, result: { ok: false, error: e?.message } });
     }
   }
 
