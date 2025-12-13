@@ -4,6 +4,15 @@ import { createOrderFromNames } from '@/lib/createOrderFromNames';
 
 export const runtime = 'nodejs';
 
+export async function OPTIONS() {
+  return new NextResponse(null, {
+    status: 200,
+    headers: {
+      Allow: 'POST, OPTIONS',
+    },
+  });
+}
+
 export async function POST(req: NextRequest) {
   if (!checkAdminAuth(req.headers)) {
     return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
@@ -11,7 +20,7 @@ export async function POST(req: NextRequest) {
 
   const body = await req.json();
 
-  // 1) Format simple (debug/tests manuels)
+  // Debug / test direct
   if (body?.customer_phone && Array.isArray(body?.items)) {
     const result = await createOrderFromNames({
       phone: body.customer_phone,
@@ -20,10 +29,12 @@ export async function POST(req: NextRequest) {
       callId: body.call_id ?? 'direct_test',
     });
 
-    return NextResponse.json({ results: [{ toolCallId: 'direct', result }] });
+    return NextResponse.json({
+      results: [{ toolCallId: 'direct', result }],
+    });
   }
 
-  // 2) Format Vapi tool
+  // Vapi tool format
   const toolCalls = body?.message?.toolCallList;
   if (!Array.isArray(toolCalls)) {
     return NextResponse.json({ error: 'invalid_payload' }, { status: 400 });
