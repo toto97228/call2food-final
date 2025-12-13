@@ -4,6 +4,15 @@ import { createOrderFromNames } from '@/lib/createOrderFromNames';
 
 export const runtime = 'nodejs';
 
+export async function OPTIONS() {
+  return new NextResponse(null, {
+    status: 200,
+    headers: {
+      Allow: 'POST, OPTIONS',
+    },
+  });
+}
+
 export async function POST(req: NextRequest) {
   if (!checkAdminAuth(req.headers)) {
     return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
@@ -11,7 +20,7 @@ export async function POST(req: NextRequest) {
 
   const body = await req.json();
 
-  // 1) Format simple (debug / tests)
+  // 1) Format direct (tests)
   if (body?.customer_phone && Array.isArray(body?.items)) {
     const result = await createOrderFromNames({
       phone: body.customer_phone,
@@ -29,7 +38,6 @@ export async function POST(req: NextRequest) {
   }
 
   const results = [];
-
   for (const call of toolCalls) {
     try {
       const { customer_phone, items, notes, call_id } = call.arguments ?? {};
@@ -39,10 +47,12 @@ export async function POST(req: NextRequest) {
         notes,
         callId: call_id ?? call.id,
       });
-
       results.push({ toolCallId: call.id, result });
     } catch (e: any) {
-      results.push({ toolCallId: call.id, result: { ok: false, error: e?.message } });
+      results.push({
+        toolCallId: call?.id ?? 'unknown',
+        result: { ok: false, error: e?.message ?? 'unknown_error' },
+      });
     }
   }
 
